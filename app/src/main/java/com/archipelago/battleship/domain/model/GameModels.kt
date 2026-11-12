@@ -234,7 +234,11 @@ data class ShotRecord(
     val result: ShotResult,
     val by: Side,
     val round: Int,
-    val shipType: ShipType? = null
+    val shipType: ShipType? = null,
+    // true = 单点攻击（受坐标去重约束）；false = 十字范围伤害 / AA 拦截中心
+    val single: Boolean = true,
+    // 打出这一炮的舰种，用于【上浮暴露复核】时把命中归因到原攻击者（MVP 统计）
+    val attacker: ShipType? = null
 )
 
 @Serializable

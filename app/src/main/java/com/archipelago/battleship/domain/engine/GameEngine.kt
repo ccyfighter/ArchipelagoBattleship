@@ -54,8 +54,15 @@ class GameEngine(config: GameConfig = GameConfig()) {
     private fun isMyTurn(side: Side): Boolean =
         state.phase == RoomPhase.IN_BATTLE && state.turn == side && state.turnPhase != TurnPhase.GAME_OVER
 
-    private fun Board.record(at: Coord, r: ShotResult, by: Side, t: ShipType?, mark: Boolean): Board = copy(
-        shots = (shots + ShotRecord(at, r, by, state.round, t)).takeLast(500),
+    private fun Board.record(
+        at: Coord,
+        r: ShotResult,
+        by: Side,
+        t: ShipType?,
+        mark: Boolean,
+        attacker: ShipType? = null
+    ): Board = copy(
+        shots = (shots + ShotRecord(at, r, by, state.round, t, mark, attacker)).takeLast(500),
         attackedPoints = if (mark) attackedPoints + at else attackedPoints
     )
 
@@ -334,6 +341,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
             if (mustSurface) {
                 streak = 0
                 log(LogKind.SKILL, "【强制上浮】${nameOf(side)} 潜艇本回合全部 3 格暴露，可被常规炮击")
+                board = resolveSubmergedMisses(side, sub, board)
             }
             surfaceNext = false
         }
@@ -355,6 +363,52 @@ class GameEngine(config: GameConfig = GameConfig()) {
         revision++
         log(LogKind.SYSTEM, "=== 第 ${state.round} 回合 · ${nameOf(side)} 行动｜阶段一：可选战术行动 ===")
         checkGameOver()
+    }
+
+    /**
+     * 【上浮暴露复核】强制上浮的那一刻，把此前因【潜望镜隐蔽】被判为 MISS 的单点炮击复核为命中。
+     *
+     * 只处理"落在潜艇首尾两格、且当时根本没找到船"的单点 MISS（shipType == null && single）。
+     * 空海 MISS、十字范围伤害 MISS、"该舰格已损毁"MISS 一律不动，
+     * 因此其他舰船的打击结算逻辑完全不变；attackedPoints 也不改，坐标依旧不可重复攻击。
+     *
+     * 复核后把对应 ShotRecord 由 MISS 改为 HIT：棋盘上的 ○ 自动变 X（沿用既有渲染），
+     * 玩家不需要重新点格子，也不会多获得一次攻击机会；下次上浮时这些记录已不是 MISS，
+     * 天然不会重复结算。命中按 ShotRecord.attacker / by 归因给原攻击者，MVP 统计不漏。
+     */
+    private fun resolveSubmergedMisses(side: Side, sub: Ship, board: Board): Board {
+        val center = if (sub.cells.size > 1) sub.cells[1] else sub.cells[0]
+        val hidden = sub.cells.filter { it != center }.toSet()
+        if (hidden.isEmpty()) return board
+
+        val shots = board.shots.toMutableList()
+        val owners = LinkedHashMap<Coord, ShotRecord>()
+        for (i in shots.indices) {
+            val s = shots[i]
+            if (s.result == ShotResult.MISS && s.single && s.shipType == null && s.at in hidden) {
+                if (!owners.containsKey(s.at)) owners[s.at] = s
+                shots[i] = s.copy(result = ShotResult.HIT, shipType = ShipType.SUBMARINE)
+            }
+        }
+        if (owners.isEmpty()) return board
+
+        // 必须从 board 重新取当前潜艇对象，保留本回合刚设置的 surfaced = true
+        val current = board.ships.firstOrNull { it.id == sub.id } ?: return board
+        val updated = current.copy(hits = current.hits + owners.keys)
+        val nb = board.copy(
+            ships = board.ships.map { if (it.id == sub.id) updated else it },
+            shots = shots
+        )
+        for (rec in owners.values) {
+            rec.attacker?.let { addDamage(rec.by, it) }
+        }
+        val label = owners.keys.joinToString("、") { coordLabel(it) }
+        log(
+            LogKind.HIT,
+            "【上浮暴露】${nameOf(side)} 潜艇上浮，此前 ${owners.size} 处水花点复核为命中 @$label" +
+                (if (updated.sunk) "，潜艇被击沉！" else "")
+        )
+        return nb
     }
 
     /* ==================== 攻击结算 ==================== */
@@ -415,7 +469,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
         }
         val ship = board.ships.firstOrNull { !it.sunk && at in it.cells && canBeHit(it, at, kind) }
             ?: return ShotReport(
-                board.record(at, ShotResult.MISS, by, null, mark),
+                board.record(at, ShotResult.MISS, by, null, mark, attackerShip),
                 ShotResult.MISS, "未命中（水花）", LogKind.MISS, false
             )
         if (at in ship.hits) {
