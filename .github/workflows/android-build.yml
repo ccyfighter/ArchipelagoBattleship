@@ -1,0 +1,133 @@
+name: Android Build
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show repository structure
+        run: |
+          echo "===== root ====="
+          ls -a
+          echo "===== kotlin sources ====="
+          find app/src/main/java -name "*.kt" | sort
+          echo "===== root build.gradle.kts ====="
+          cat build.gradle.kts
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.gradle/configuration-cache
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Locate Android SDK
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "SDK path: $SDK"
+
+      - name: Fix SDK permissions
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" "${ANDROID_HOME:-/usr/local/lib/android/sdk}" 2>/dev/null || true
+
+      - name: Install Android SDK components
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SM=""
+          for p in "$SDK/cmdline-tools/latest/bin/sdkmanager" "$SDK/cmdline-tools/16.0/bin/sdkmanager" "$SDK/cmdline-tools/15.0/bin/sdkmanager" "$SDK/tools/bin/sdkmanager"; do
+            if [ -x "$p" ]; then SM="$p"; break; fi
+          done
+          if [ -z "$SM" ]; then
+            SM=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n 1)
+          fi
+          if [ -n "$SM" ]; then
+            yes 2>/dev/null | "$SM" --licenses > /dev/null 2>&1 || true
+            "$SM" --install "platforms;android-34" "build-tools;34.0.0" "platform-tools" > /dev/null 2>&1 || true
+          fi
+          echo "--- platforms ---"
+          ls "$SDK/platforms" 2>/dev/null || true
+          echo "--- build-tools ---"
+          ls "$SDK/build-tools" 2>/dev/null || true
+          exit 0
+
+      - name: Install Gradle 8.7
+        run: |
+          set -e
+          mkdir -p "$RUNNER_TEMP/gradle-dist"
+          curl -sSL -o "$RUNNER_TEMP/gradle-dist/gradle.zip" https://services.gradle.org/distributions/gradle-8.7-bin.zip
+          unzip -q -o "$RUNNER_TEMP/gradle-dist/gradle.zip" -d "$RUNNER_TEMP/gradle-dist"
+          chmod +x "$RUNNER_TEMP/gradle-dist/gradle-8.7/bin/gradle"
+          echo "$RUNNER_TEMP/gradle-dist/gradle-8.7/bin" >> "$GITHUB_PATH"
+
+      - name: Show tool versions
+        run: |
+          java -version 2>&1 | head -n 2
+          gradle --version | head -n 6
+
+      - name: Generate Gradle Wrapper
+        run: |
+          set -e
+          mkdir -p "$RUNNER_TEMP/gw"
+          ( cd "$RUNNER_TEMP/gw" && gradle wrapper --gradle-version 8.7 --distribution-type bin --no-daemon )
+          mkdir -p "$GITHUB_WORKSPACE/gradle/wrapper"
+          cp "$RUNNER_TEMP/gw/gradlew" "$GITHUB_WORKSPACE/gradlew"
+          cp "$RUNNER_TEMP/gw/gradlew.bat" "$GITHUB_WORKSPACE/gradlew.bat"
+          cp "$RUNNER_TEMP/gw/gradle/wrapper/gradle-wrapper.jar" "$GITHUB_WORKSPACE/gradle/wrapper/gradle-wrapper.jar"
+          cp "$RUNNER_TEMP/gw/gradle/wrapper/gradle-wrapper.properties" "$GITHUB_WORKSPACE/gradle/wrapper/gradle-wrapper.properties"
+          chmod +x "$GITHUB_WORKSPACE/gradlew"
+
+      - name: Build Debug APK
+        run: |
+          set +e
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee build.log
+          code=${PIPESTATUS[0]}
+          echo "==================== KOTLIN ERRORS ===================="
+          grep -E "^e: " build.log || echo "(none)"
+          echo "==================== RAW ERRORS ===================="
+          grep -nE "(Exception|error: |FAILED|What went wrong)" build.log | head -n 60 || true
+          echo "==================== END ===================="
+          exit $code
+
+      - name: Prepare artifact
+        if: success()
+        run: cp app/build/outputs/apk/debug/app-debug.apk app-debug.apk
+
+      - name: Upload app-debug.apk
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: archipelago-battleship-debug
+          path: app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload build reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports
+          path: |
+            build.log
+            app/build/reports
+            app/build/outputs
+          if-no-files-found: ignore
