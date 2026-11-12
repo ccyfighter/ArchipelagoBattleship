@@ -45,6 +45,8 @@ data class BoardPalette(
     val legalInk: Color,
     val spentFill: Color,
     val spentInk: Color,
+    val reconFill: Color,
+    val reconInk: Color,
     val accent: Color,
     val select: Color
 )
@@ -82,6 +84,8 @@ fun palette(mode: AppThemeMode): BoardPalette = if (mode == AppThemeMode.PAPER) 
         legalInk = Color(0xFF12806C),
         spentFill = Color(0x1A1B3350),
         spentInk = Color(0x554A5E70),
+        reconFill = Color(0x2FB8791B),
+        reconInk = Color(0xFFA9690F),
         accent = Color(0xFF1F4E79),
         select = Color(0xFFE07B1B)
     )
@@ -118,6 +122,8 @@ fun palette(mode: AppThemeMode): BoardPalette = if (mode == AppThemeMode.PAPER) 
         legalInk = Color(0xFF5CF0CE),
         spentFill = Color(0x1A9FD8CC),
         spentInk = Color(0x554FC3F7),
+        reconFill = Color(0x2FFFD166),
+        reconInk = Color(0xFFFFD166),
         accent = Color(0xFF35E0C0),
         select = Color(0xFFFFC107)
     )

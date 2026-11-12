@@ -132,7 +132,8 @@ object Rules {
             shallows = shallows,
             ships = ships,
             shots = emptyList(),
-            attackedPoints = emptySet()
+            attackedPoints = emptySet(),
+            reconCells = emptySet()
         )
     }
 

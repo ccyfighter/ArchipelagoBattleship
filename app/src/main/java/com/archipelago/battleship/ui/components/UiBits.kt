@@ -300,7 +300,7 @@ fun ChipButton(
 
 /* ============================ 棋盘图例 ============================ */
 
-private enum class LegendKind { LEGAL, SPENT, MISS, HIT, SUNK, BLOCKED, LAST, TERRAIN }
+private enum class LegendKind { LEGAL, SPENT, RECON, MISS, HIT, SUNK, BLOCKED, LAST, TERRAIN }
 
 private fun DrawScope.legendMark(kind: LegendKind, pal: BoardPalette) {
     val s = size.minDimension
@@ -327,6 +327,23 @@ private fun DrawScope.legendMark(kind: LegendKind, pal: BoardPalette) {
             drawRect(pal.spentFill, topLeft = Offset.Zero, size = Size(s, s))
             drawLine(pal.spentInk, Offset(s * 0.12f, s * 0.88f), Offset(s * 0.88f, s * 0.12f), strokeWidth = 2f)
             drawLine(pal.spentInk, Offset(s * 0.42f, s * 0.88f), Offset(s * 0.88f, s * 0.42f), strokeWidth = 1f)
+        }
+        LegendKind.RECON -> {
+            drawRect(pal.reconFill, topLeft = Offset.Zero, size = Size(s, s))
+            val m = s * 0.12f
+            drawRect(
+                pal.reconInk.copy(alpha = 0.65f),
+                topLeft = Offset(m, m), size = Size(s - 2f * m, s - 2f * m),
+                style = Stroke(1.5f)
+            )
+            val lens = Offset(s * 0.43f, s * 0.43f)
+            drawCircle(pal.reconInk, radius = s * 0.15f, center = lens, style = Stroke(2f))
+            drawLine(
+                pal.reconInk,
+                Offset(lens.x + s * 0.11f, lens.y + s * 0.11f),
+                Offset(lens.x + s * 0.25f, lens.y + s * 0.25f),
+                strokeWidth = 2f
+            )
         }
         LegendKind.MISS -> {
             drawRect(pal.missFill, topLeft = Offset.Zero, size = Size(s, s))
@@ -390,6 +407,7 @@ fun BoardLegend(mode: AppThemeMode, modifier: Modifier = Modifier) {
     val items = listOf(
         LegendKind.LEGAL to "可攻击",
         LegendKind.SPENT to "已打过",
+        LegendKind.RECON to "已侦察",
         LegendKind.MISS to "未命中",
         LegendKind.HIT to "命中",
         LegendKind.SUNK to "击沉",
@@ -412,7 +430,7 @@ fun BoardLegend(mode: AppThemeMode, modifier: Modifier = Modifier) {
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.padding(start = 2.dp, bottom = 3.dp)
         )
-        items.chunked(4).forEach { row ->
+        items.chunked(3).forEach { row ->
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
                 row.forEach { (kind, label) ->
                     Row(

@@ -496,18 +496,22 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 ShotResult.MISS, "该舰格已损毁，重复打击无效", LogKind.MISS, false
             )
         }
-        val extra = if (
-            kind == AttackKind.DEPTH_CHARGE &&
-            ship.type == ShipType.SUBMARINE &&
-            !ship.surfaced &&
-            ship.cells.size > 1 &&
-            at == ship.cells[1]
-        ) ship.cells else emptyList()
+        // 【潜望镜一击必沉】水下潜艇的中心第 2 格是唯一暴露点（潜望镜）。
+        // 一旦被任何能命中它的攻击（常规炮击 / 舰载机炸弹 / 深弹 / 鱼雷）打中，
+        // 直接判整艇沉没：不再出现「只掉 1 格血还能发射鱼雷、等强制上浮复核才沉」。
+        // 只作用于 SUBMARINE，其他舰船的打击结算完全不变。
+        val periscopeHit = ship.type == ShipType.SUBMARINE &&
+            !ship.surfaced && ship.cells.size > 1 && at == ship.cells[1]
+        val extra = if (periscopeHit) ship.cells else emptyList()
         val updated = ship.copy(hits = ship.hits + at + extra)
         val ships = board.ships.map { if (it.id == ship.id) updated else it }
         val result = if (updated.sunk) ShotResult.SUNK else ShotResult.HIT
         val nb = board.copy(ships = ships).record(at, result, by, ship.type, mark)
-        val text = if (updated.sunk) "击沉敌方 ${FleetCatalog.label(ship.type)}！" else "命中敌方 ${FleetCatalog.label(ship.type)}"
+        val text = when {
+            updated.sunk && periscopeHit -> "命中【潜望镜】${FleetCatalog.label(ship.type)}，整艇直接沉没！"
+            updated.sunk -> "击沉敌方 ${FleetCatalog.label(ship.type)}！"
+            else -> "命中敌方 ${FleetCatalog.label(ship.type)}"
+        }
         return ShotReport(nb, result, text, LogKind.HIT, true, ship.type)
     }
 
@@ -554,10 +558,15 @@ class GameEngine(config: GameConfig = GameConfig()) {
     }
 
     /**
-     * 鱼雷机沿「起点 + 航向 2 格」逐格突防：
-     * 整条航线只要擦到敌方防空区，战机即被击落、空袭全部失效；
-     * 否则逐格结算，遇山地或命中第一艘船即停（沿用潜航鱼雷的手感）。
-     * 属于范围伤害，mark = false，不写入坐标去重。
+     * 鱼雷机投雷：沿「投雷起点 + 航向」直线推进，只在一处爆炸、只结算一次伤害，
+     * 沿途不写 ShotRecord，棋盘上不会留下一串轨迹标记。
+     *
+     * 爆炸点按优先级确定：
+     *   ① 航线上碰到的第一艘未沉敌舰所在格（与潜航鱼雷同为 AttackKind.TORPEDO，
+     *      可命中水下潜艇、不受炮艇「灵活规避」影响）；
+     *   ② 前方是山地时，取撞山前的那一格；投雷起点即山地则空袭无效；
+     *   ③ 到达最长射程的最后一格。
+     * 战机本身仍受整条航线的防空区拦截：被击落则整次空袭失效。
      */
     private fun applyTorpedoBomberLine(side: Side, line: List<Coord>) {
         val enemy = side.other()
@@ -568,22 +577,42 @@ class GameEngine(config: GameConfig = GameConfig()) {
             log(LogKind.AA, "【防空拦截】战机被击落，鱼雷机空袭全部失效 @${coordLabel(line.first())}")
             return
         }
-        for (c in line) {
+        var impact = line.last()
+        var reason = "到达最大射程"
+        var invalid = false
+        for (i in line.indices) {
+            val c = line[i]
             if (c in board.mountains) {
-                log(LogKind.INFO, "鱼雷机突防至 ${coordLabel(c)} 遇山地，攻击中止")
+                if (i == 0) {
+                    invalid = true
+                    reason = "投雷起点即山地"
+                } else {
+                    impact = line[i - 1]
+                    reason = "前方 ${coordLabel(c)} 为山地，撞山前"
+                }
                 break
             }
-            val rep = applyShot(
-                board, c, AttackKind.AIR_CROSS, side,
-                ShipType.AVIATION_CRUISER, false, mark = false
-            )
-            board = rep.board
-            log(if (rep.damage) LogKind.HIT else LogKind.MISS, "鱼雷机 @${coordLabel(c)}：${rep.text}")
-            if (rep.damage) {
-                addDamage(side, ShipType.AVIATION_CRUISER)
+            if (board.ships.any { !it.sunk && c in it.cells }) {
+                impact = c
+                reason = "发现目标"
                 break
             }
         }
+        if (invalid) {
+            log(LogKind.INFO, "【鱼雷机空袭】$reason @${coordLabel(line.first())}，本次空袭无效果")
+            setBoard(enemy, board)
+            return
+        }
+        val rep = applyShot(
+            board, impact, AttackKind.TORPEDO, side,
+            ShipType.AVIATION_CRUISER, ignoresAA = true, mark = false
+        )
+        board = rep.board
+        log(
+            if (rep.damage) LogKind.HIT else LogKind.MISS,
+            "【鱼雷机空袭】$reason，鱼雷于 ${coordLabel(impact)} 爆炸：${rep.text}"
+        )
+        if (rep.damage) addDamage(side, ShipType.AVIATION_CRUISER)
         setBoard(enemy, board)
     }
 
@@ -741,16 +770,20 @@ class GameEngine(config: GameConfig = GameConfig()) {
 
         when (kind) {
             SkillKind.RECON -> {
-                val cells = crossCells(center, boardOf(side.other()).size)
-                if (intercepted(boardOf(side.other()), cells)) {
+                val eb = boardOf(side.other())
+                val cells = crossCells(center, eb.size)
+                if (intercepted(eb, cells)) {
                     log(LogKind.AA, "【防空拦截】舰载侦察机被击落 @${coordLabel(center)}")
                 } else {
-                    val n = boardOf(side.other()).ships.count { s ->
+                    val n = eb.ships.count { s ->
                         !s.sunk && s.type != ShipType.SUBMARINE && s.cells.any { it in cells }
                     }
+                    // 扫描成功才留痕：只记录「哪 5 格被扫过」，不记录船的位置，
+                    // 棋盘据此画放大镜标记；撤销 / 重做随 state 快照自然回退。
+                    setBoard(side.other(), eb.copy(reconCells = eb.reconCells + cells))
                     log(
                         LogKind.SKILL,
-                        "${nameOf(side)}【舰载侦察机】@${coordLabel(center)}：十字 5 格内水面舰信号 ${if (n == 0) "无" else "$n 个"}（仅报数量，不报坐标）"
+                        "${nameOf(side)}【舰载侦察机】@${coordLabel(center)}：十字 5 格已完成扫描（棋盘标记「已侦察」），水面舰信号 ${if (n == 0) "无" else "$n 个"}（仅报数量，不报坐标）"
                     )
                 }
             }
@@ -833,7 +866,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 }
                 log(
                     LogKind.SKILL,
-                    "${nameOf(side)} 派出【鱼雷机空袭】@${coordLabel(line.first())}：沿航向突防 ${line.size} 格直线"
+                    "${nameOf(side)} 派出【鱼雷机空袭】@${coordLabel(line.first())}：沿航向投雷，最多推进 ${line.size} 格，只在爆炸点结算，不显示轨迹"
                 )
                 applyTorpedoBomberLine(side, line)
             }

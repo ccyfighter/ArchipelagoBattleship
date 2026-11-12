@@ -95,7 +95,7 @@ object FleetCatalog {
         ShipSpec(
             ShipType.CARRIER, "航空母舰", 5,
             "战术轰炸机：指定 1 格轰炸（等效 1 炮）",
-            "舰载侦察机（阶段一 / 第 2 回合起 / CD3 / 全局 5 次）：探测十字 5 格内水面船数量；成为己方最后存活舰时解锁绝境副炮（无视 AA 的单格物理炮击）",
+            "舰载侦察机（阶段一 / 第 2 回合起 / CD3 / 全局 5 次）：探测十字 5 格内水面船数量，扫描成功时该十字 5 格会在敌方棋盘留下「已侦察」放大镜标记；成为己方最后存活舰时解锁绝境副炮（无视 AA 的单格物理炮击）",
             "舰载侦察机 / 本体点防空：自身 5 格免疫敌方飞机侦察与轰炸并击落来犯敌机"
         ),
         ShipSpec(
@@ -107,7 +107,7 @@ object FleetCatalog {
         ShipSpec(
             ShipType.AVIATION_CRUISER, "航空巡洋舰", 4,
             "常规单格炮击",
-            "鱼雷机空袭（阶段二 / 第 2 回合起 / CD3 / 全局 2 次）：先点突防起点，再点同行/同列一格定航向；沿航向对起点及之后 2 格共 3 格逐格判定，遇山地或命中第一艘船即停；受 AA 拦截，无法伤害水下潜艇",
+            "鱼雷机空袭（阶段二 / 第 2 回合起 / CD3 / 全局 2 次）：先点投雷起点，再点同行/同列一格定航向；鱼雷沿直线最多推进 3 格，只在「碰到敌舰 / 撞山前一格 / 射程尽头」单点爆炸，伤害判定与潜航鱼雷相同（可命中水下潜艇），不显示沿途轨迹；战机仍受 AA 拦截",
             "无"
         ),
         ShipSpec(
@@ -120,7 +120,7 @@ object FleetCatalog {
             ShipType.SUBMARINE, "潜艇", 3,
             "潜航鱼雷：沿自身所在行 / 列直线最多 4 格推进，遇山地、已攻击过的格子或命中第一艘船即停",
             "无（鱼雷即常规攻击）",
-            "潜望镜隐蔽：水下仅中心第 2 格可被常规炮击 / 侦察命中，首尾反馈 MISS；每次发射后下 1 回合强制上浮，连续潜航 3 回合后第 4 回合强制上浮"
+            "潜望镜隐蔽：水下仅中心第 2 格可被常规炮击 / 侦察命中，首尾反馈 MISS；【潜望镜一击必沉】任何命中中心格的攻击直接判整艇沉没，不会再带伤发射鱼雷或等上浮复核才沉；每次发射后下 1 回合强制上浮，连续潜航 3 回合后第 4 回合强制上浮"
         ),
         ShipSpec(
             ShipType.AA_CRUISER, "防空巡洋舰", 3,
@@ -248,7 +248,10 @@ data class Board(
     val shallows: Set<Coord> = emptySet(),
     val ships: List<Ship> = emptyList(),
     val shots: List<ShotRecord> = emptyList(),
-    val attackedPoints: Set<Coord> = emptySet()
+    val attackedPoints: Set<Coord> = emptySet(),
+    // 舰载侦察机成功扫描过的格子（十字 5 格）；只用于棋盘示意，不泄露舰船坐标。
+    // 带默认值，联机 JSON 新旧版本互相兼容（Wire.json 已开 ignoreUnknownKeys）。
+    val reconCells: Set<Coord> = emptySet()
 )
 
 @Serializable

@@ -288,6 +288,32 @@ fun BoardCanvas(
             )
         }
 
+        // ---------- 6.5 侦察机扫描区：淡琥珀底 + 放大镜角标 ----------
+        for (c in board.reconCells) {
+            if (!c.inBounds(n)) continue
+            val tl = topLeft(c)
+            drawRect(pal.reconFill, topLeft = tl, size = Size(cell, cell))
+            val m = cell * 0.12f
+            drawRect(
+                pal.reconInk.copy(alpha = 0.65f),
+                topLeft = Offset(tl.x + m, tl.y + m),
+                size = Size(cell - 2f * m, cell - 2f * m),
+                style = Stroke(max(1f, cell * 0.04f))
+            )
+            // 放大镜：小圆环 + 右下短柄，与未命中圆环 / 命中圆点 / 击沉方块都不重复
+            val lens = Offset(tl.x + cell * 0.43f, tl.y + cell * 0.43f)
+            drawCircle(
+                pal.reconInk, radius = cell * 0.15f, center = lens,
+                style = Stroke(max(1f, cell * 0.05f))
+            )
+            drawLine(
+                pal.reconInk,
+                Offset(lens.x + cell * 0.11f, lens.y + cell * 0.11f),
+                Offset(lens.x + cell * 0.25f, lens.y + cell * 0.25f),
+                strokeWidth = max(1f, cell * 0.06f)
+            )
+        }
+
         // ---------- 7. 已攻击格：灰斜纹，明确「此格已封锁」 ----------
         for (c in board.attackedPoints) {
             if (!c.inBounds(n)) continue
