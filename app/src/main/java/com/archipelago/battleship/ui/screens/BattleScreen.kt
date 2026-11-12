@@ -2,14 +2,7 @@ package com.archipelago.battleship.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -25,7 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.archipelago.battleship.core.BoardCanvas
@@ -43,11 +36,14 @@ import com.archipelago.battleship.domain.model.coordLabel
 import com.archipelago.battleship.domain.model.inBounds
 import com.archipelago.battleship.ui.GameViewModel
 import com.archipelago.battleship.ui.UiState
+import com.archipelago.battleship.ui.components.BoardLegend
 import com.archipelago.battleship.ui.components.ChipButton
 import com.archipelago.battleship.ui.components.InfoLine
 import com.archipelago.battleship.ui.components.LogList
 import com.archipelago.battleship.ui.components.ResultBanner
 import com.archipelago.battleship.ui.components.SectionTitle
+import com.archipelago.battleship.ui.components.StatPill
+import com.archipelago.battleship.ui.components.SurfaceCard
 
 private fun subCenter(ship: Ship): Coord =
     if (ship.cells.size > 1) ship.cells[1] else ship.cells[0]
@@ -159,58 +155,66 @@ fun BattleScreen(vm: GameViewModel, state: UiState) {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(10.dp)
+            .padding(12.dp)
     ) {
         SectionTitle("战斗阶段 · IN_BATTLE（战斗禁言）")
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(10.dp))
-                .padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
+        SurfaceCard(accent = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "第 ${view.round} 回合 · ${if (myTurn) "轮到你行动" else "对方行动中"}",
-                    fontSize = 14.sp,
+                    "第 ${view.round} 回合",
+                    fontSize = 18.sp,
                     color = MaterialTheme.colorScheme.primary
                 )
                 Text(
-                    if (tacticPhase) "阶段一 · 可选战术行动" else "阶段二 · 多船协同攻击",
+                    if (myTurn) "  ·  轮到你行动" else "  ·  对方行动中",
                     fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
                 )
             }
             Text(
-                "攻击名额 ${view.attackUsed}/${view.attackBudget}",
-                fontSize = 13.sp,
-                color = if (budgetLeft == 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary
+                if (tacticPhase) "阶段一 · 可选战术行动" else "阶段二 · 多船协同攻击",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                modifier = Modifier.padding(top = 2.dp)
             )
-        }
-
-        InfoLine("我方存活 ${view.myAlive.size} 艘 ｜ 敌方存活 ${view.enemyAlive.size} 艘 ｜ 敌方已击沉 ${view.enemySunkTypes.size} 艘")
-        ResultBanner(view.log)
-
-        val fraction = (state.timerSeconds.toFloat() / Rules.TURN_SECONDS.toFloat()).coerceIn(0f, 1f)
-        Text(
-            "回合倒计时 ${state.timerSeconds}s / ${Rules.TURN_SECONDS}s",
-            fontSize = 12.sp,
-            color = if (fraction < 0.2f) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(7.dp)
-                .background(MaterialTheme.colorScheme.surface)
-        ) {
+            Spacer(Modifier.height(10.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                StatPill("攻击", "${view.attackUsed}/${view.attackBudget}",
+                    if (budgetLeft == 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    Modifier.weight(1f))
+                StatPill("我方", "${view.myAlive.size}", MaterialTheme.colorScheme.tertiary, Modifier.weight(1f))
+                StatPill("敌方", "${view.enemyAlive.size}", MaterialTheme.colorScheme.secondary, Modifier.weight(1f))
+                StatPill("击沉", "${view.enemySunkTypes.size}", MaterialTheme.colorScheme.error, Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(10.dp))
+            val fraction = (state.timerSeconds.toFloat() / Rules.TURN_SECONDS.toFloat()).coerceIn(0f, 1f)
+            val timerColor = if (fraction < 0.2f) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("回合倒计时", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                Spacer(Modifier.weight(1f))
+                Text("${state.timerSeconds}s / ${Rules.TURN_SECONDS}s", fontSize = 11.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, color = timerColor)
+            }
+            Spacer(Modifier.height(5.dp))
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(fraction)
-                    .height(7.dp)
-                    .background(if (fraction < 0.2f) Color(0xFFE53935) else MaterialTheme.colorScheme.primary)
-            )
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction)
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(timerColor)
+                )
+            }
         }
+
+        Spacer(Modifier.height(8.dp))
+        ResultBanner(view.log)
         Spacer(Modifier.height(8.dp))
 
         Row(modifier = Modifier.fillMaxWidth()) {
@@ -238,7 +242,11 @@ fun BattleScreen(vm: GameViewModel, state: UiState) {
                 "已选【${FleetCatalog.label(sub.type)}】· ${if (pt != null) "暂存目标 ${coordLabel(pt)}" else "点击敌方海域格子选择目标"}；确认前可反复修改"
             else -> "先选择一艘开火舰船，或选择一个技能"
         }
-        InfoLine(hint)
+        Spacer(Modifier.height(6.dp))
+        SurfaceCard(accent = MaterialTheme.colorScheme.secondary.copy(alpha = 0.65f)) {
+            InfoLine(hint)
+        }
+        Spacer(Modifier.height(8.dp))
 
         BoardCanvas(
             board = board,
@@ -248,18 +256,16 @@ fun BattleScreen(vm: GameViewModel, state: UiState) {
             highlight = if (showEnemy) highlight else null,
             pathCells = path,
             markers = skillTargets,
-            modifier = Modifier.fillMaxWidth().padding(4.dp),
+            modifier = Modifier.fillMaxWidth().padding(2.dp),
             onTap = { onTap(it) }
         )
-        InfoLine("图例：○ 未命中 ｜ X 命中 ｜ S 击沉 ｜ AA 战机被击落 ｜ - 免疫/阻挡 ｜ 金色呼吸框=最近一次攻击")
+        Spacer(Modifier.height(8.dp))
+        BoardLegend(state.theme)
+        InfoLine("深色标尺带为坐标：横向 A… / 纵向 1…；选中目标时对应的行列标签会同步高亮。")
 
+        Spacer(Modifier.height(8.dp))
         // ---- 操作确认区：所有动作都显式确认，不自动推进 ----
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.65f), RoundedCornerShape(10.dp))
-                .padding(8.dp)
-        ) {
+        SurfaceCard {
             if (pendingSkill != null) {
                 Row(modifier = Modifier.fillMaxWidth()) {
                     Button(
@@ -358,6 +364,7 @@ fun BattleScreen(vm: GameViewModel, state: UiState) {
         }
         InfoLine("主炮齐射需点 2 个坐标；鱼雷机需点「起点 + 同行/同列航向点」共 2 点；范围伤害可重复覆盖；单点攻击自动排除已打过的格子。")
 
+        Spacer(Modifier.height(8.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
             OutlinedButton(
                 onClick = { clearDraft(); vm.undo() },
