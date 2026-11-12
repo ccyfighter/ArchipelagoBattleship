@@ -261,14 +261,38 @@ object Rules {
     }
 
     fun skillMinRound(kind: SkillKind): Int = when (kind) {
-        SkillKind.SALVO -> 2
-        SkillKind.TORPEDO_BOMBER -> 2
+        SkillKind.RECON, SkillKind.SONAR, SkillKind.SALVO, SkillKind.TORPEDO_BOMBER -> 2
         SkillKind.INCENDIARY -> 3
         SkillKind.AIR_STRIKE_CALL -> 4
         else -> 1
     }
 
-    fun skillTargetCount(kind: SkillKind): Int = if (kind == SkillKind.SALVO) 2 else 1
+    /** 鱼雷机需要 2 个点：第 1 个是突防起点，第 2 个与起点同行 / 同列，只用于确定航向。 */
+    fun skillTargetCount(kind: SkillKind): Int = when (kind) {
+        SkillKind.SALVO, SkillKind.TORPEDO_BOMBER -> 2
+        else -> 1
+    }
+
+    /** 返回鱼雷机单位航向；dir 必须与起点同行或同列，且不能是同一个点。 */
+    fun torpedoBomberDir(start: Coord, dir: Coord): Pair<Int, Int>? {
+        val dr = dir.r - start.r
+        val dc = dir.c - start.c
+        if ((dr == 0) == (dc == 0)) return null
+        return (when { dr > 0 -> 1; dr < 0 -> -1; else -> 0 }) to
+            (when { dc > 0 -> 1; dc < 0 -> -1; else -> 0 })
+    }
+
+    /** 起点 + 沿航向 2 格，最多 3 格直线；越界即截断。 */
+    fun torpedoBomberLine(start: Coord, dir: Coord, size: Int): List<Coord> {
+        val (sr, sc) = torpedoBomberDir(start, dir) ?: return listOf(start)
+        val out = ArrayList<Coord>(3)
+        for (i in 0..2) {
+            val c = Coord(start.r + sr * i, start.c + sc * i)
+            if (!c.inBounds(size)) break
+            out.add(c)
+        }
+        return out
+    }
 
     fun isAir(kind: com.archipelago.battleship.domain.model.AttackKind): Boolean = when (kind) {
         com.archipelago.battleship.domain.model.AttackKind.BOMBER,

@@ -69,6 +69,24 @@ class GameEngine(config: GameConfig = GameConfig()) {
     private fun markActed(side: Side, shipId: String) =
         updatePlayer(side) { it.copy(actedShipIds = it.actedShipIds + shipId) }
 
+    /**
+     * 所有行动的唯一入口守卫：已沉没舰船一律不得开火 / 释放技能。
+     * 原先是静默 return，UI 没有任何反馈，容易被误认为「沉船还能起舰载机」；
+     * 这里改为明确播报，并借 revision 变化触发一次界面刷新。
+     */
+    private fun actionableShip(side: Side, shipId: String): Ship? {
+        val ship = state.players[side.ordinal].board.ships.firstOrNull { it.id == shipId }
+        if (ship == null) {
+            log(LogKind.INFO, "找不到该舰船")
+            return null
+        }
+        if (ship.sunk) {
+            log(LogKind.INFO, "【已沉没】${FleetCatalog.label(ship.type)} 已沉没，无法再开火或释放技能")
+            return null
+        }
+        return ship
+    }
+
     private fun addDamage(side: Side, type: ShipType) = updatePlayer(side) { p ->
         val k = type.name
         p.copy(damageByShip = p.damageByShip + (k to ((p.damageByShip[k] ?: 0) + 1)))
@@ -435,7 +453,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
         for (s in board.ships) {
             if (s.sunk) continue
             if (s.type != ShipType.CARRIER && s.type != ShipType.AA_CRUISER) continue
-            if (s.aaDisabledUntil >= state.round) continue
+            if (s.aaDisabledUntil == state.round) continue
             val zone = Rules.aaZone(s, board.size)
             if (cells.any { it in zone }) return true
         }
@@ -535,11 +553,44 @@ class GameEngine(config: GameConfig = GameConfig()) {
         setBoard(enemy, board)
     }
 
+    /**
+     * 鱼雷机沿「起点 + 航向 2 格」逐格突防：
+     * 整条航线只要擦到敌方防空区，战机即被击落、空袭全部失效；
+     * 否则逐格结算，遇山地或命中第一艘船即停（沿用潜航鱼雷的手感）。
+     * 属于范围伤害，mark = false，不写入坐标去重。
+     */
+    private fun applyTorpedoBomberLine(side: Side, line: List<Coord>) {
+        val enemy = side.other()
+        var board = boardOf(enemy)
+        if (intercepted(board, line)) {
+            board = board.record(line.first(), ShotResult.INTERCEPTED, side, null, false)
+            setBoard(enemy, board)
+            log(LogKind.AA, "【防空拦截】战机被击落，鱼雷机空袭全部失效 @${coordLabel(line.first())}")
+            return
+        }
+        for (c in line) {
+            if (c in board.mountains) {
+                log(LogKind.INFO, "鱼雷机突防至 ${coordLabel(c)} 遇山地，攻击中止")
+                break
+            }
+            val rep = applyShot(
+                board, c, AttackKind.AIR_CROSS, side,
+                ShipType.AVIATION_CRUISER, false, mark = false
+            )
+            board = rep.board
+            log(if (rep.damage) LogKind.HIT else LogKind.MISS, "鱼雷机 @${coordLabel(c)}：${rep.text}")
+            if (rep.damage) {
+                addDamage(side, ShipType.AVIATION_CRUISER)
+                break
+            }
+        }
+        setBoard(enemy, board)
+    }
+
     private fun fire(side: Side, a: GameAction.Fire) {
         if (!isMyTurn(side)) return
         val me = state.players[side.ordinal]
-        val ship = me.board.ships.firstOrNull { it.id == a.shipId } ?: return
-        if (ship.sunk) return
+        val ship = actionableShip(side, a.shipId) ?: return
         if (ship.id in me.actedShipIds) {
             log(LogKind.INFO, "该舰本回合已行动")
             return
@@ -638,8 +689,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
     private fun useSkill(side: Side, a: GameAction.Skill) {
         if (!isMyTurn(side)) return
         val me = state.players[side.ordinal]
-        val ship = me.board.ships.firstOrNull { it.id == a.shipId } ?: return
-        if (ship.sunk) return
+        val ship = actionableShip(side, a.shipId) ?: return
         val kind = a.kind
         if (Rules.skillFor(ship.type) != kind) {
             log(LogKind.INFO, "该舰不具备此技能")
@@ -766,12 +816,26 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 setBoard(side.other(), board)
             }
             SkillKind.TORPEDO_BOMBER -> {
+                if (a.targets.size < 2) {
+                    log(LogKind.INFO, "【鱼雷机空袭】需先点突防起点、再点同行或同列的一格指定航向")
+                    return
+                }
+                val line = Rules.torpedoBomberLine(
+                    a.targets[0], a.targets[1], boardOf(side.other()).size
+                )
+                if (line.size < 2) {
+                    log(LogKind.INFO, "【鱼雷机空袭】航向非法：第 2 个点必须与起点同行或同列")
+                    return
+                }
                 if (state.turnPhase == TurnPhase.TACTICAL) {
                     state = state.copy(turnPhase = TurnPhase.ATTACK)
                     revision++
                 }
-                log(LogKind.SKILL, "${nameOf(side)} 派出【鱼雷机空袭】@${coordLabel(center)}：十字 5 格高爆打击")
-                applyCross(side, center, AttackKind.AIR_CROSS, ShipType.AVIATION_CRUISER, false, false)
+                log(
+                    LogKind.SKILL,
+                    "${nameOf(side)} 派出【鱼雷机空袭】@${coordLabel(line.first())}：沿航向突防 ${line.size} 格直线"
+                )
+                applyTorpedoBomberLine(side, line)
             }
             SkillKind.INCENDIARY -> {
                 if (state.turnPhase == TurnPhase.TACTICAL) {

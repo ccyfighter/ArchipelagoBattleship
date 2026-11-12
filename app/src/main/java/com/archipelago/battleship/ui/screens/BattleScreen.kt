@@ -18,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -101,14 +102,28 @@ fun BattleScreen(vm: GameViewModel, state: UiState) {
     val sub = selectedShip
 
     val candidates: List<Coord> = if (!myTurn) emptyList()
-    else if (pendingSkill != null) view.legalTargets
+    else if (pendingSkill != null) {
+        val sk = pendingSkill!!
+        if (sk.kind == SkillKind.TORPEDO_BOMBER && skillTargets.size == 1) {
+            // 第 2 个点只用于定航向：高亮与起点同行 / 同列的所有格子
+            val s0 = skillTargets[0]
+            val n = view.enemyBoard.size
+            (0 until n).flatMap { i -> listOf(Coord(s0.r, i), Coord(i, s0.c)) }
+                .filter { it != s0 && it.inBounds(n) }
+                .distinct()
+        } else view.legalTargets
+    }
     else if (tacticPhase) emptyList()
     else if (sub == null) emptyList()
     else if (sub.type == ShipType.SUBMARINE) torpedoCandidates(sub, view.enemyBoard)
     else view.legalTargets
-    val path: List<Coord> =
-        if (sub != null && sub.type == ShipType.SUBMARINE && pt != null && showEnemy) torpedoPath(sub, pt)
-        else emptyList()
+    val path: List<Coord> = when {
+        sub != null && sub.type == ShipType.SUBMARINE && pt != null && showEnemy ->
+            torpedoPath(sub, pt)
+        pendingSkill?.kind == SkillKind.TORPEDO_BOMBER && skillTargets.size >= 2 ->
+            Rules.torpedoBomberLine(skillTargets[0], skillTargets[1], view.enemyBoard.size)
+        else -> emptyList()
+    }
     val highlight: Coord? = when {
         skillTargets.isNotEmpty() -> skillTargets.last()
         pt != null && showEnemy -> pt
@@ -210,6 +225,11 @@ fun BattleScreen(vm: GameViewModel, state: UiState) {
         }
 
         val hint = when {
+            pendingSkill?.kind == SkillKind.TORPEDO_BOMBER ->
+                if (skillTargets.isEmpty())
+                    "鱼雷机：第 1 点点突防起点，第 2 点点同行/同列任意一格定航向；沿航向轰炸起点及之后 2 格共 3 格"
+                else
+                    "鱼雷机：已选起点 ${coordLabel(skillTargets[0])}，再点同行/同列一格定航向（已选 ${skillTargets.size}/$need），棋盘已预览航线"
             pendingSkill != null ->
                 "技能【${pendingSkill!!.label}】已选 ${skillTargets.size}/$need：${skillTargets.joinToString("、") { coordLabel(it) }}；点棋盘可改，按「确认释放」才生效"
             sub != null && sub.type == ShipType.SUBMARINE ->
@@ -309,8 +329,20 @@ fun BattleScreen(vm: GameViewModel, state: UiState) {
         }
 
         SectionTitle("舰船技能")
+        // 双保险：即便状态帧有延迟，已沉没舰船的技能也绝不出现在可点列表里
+        val availableSkills = view.skills.filter { s -> aliveShips.any { it.id == s.shipId } }
+        LaunchedEffect(view.revision) {
+            if (selectedShipId != null && aliveShips.none { it.id == selectedShipId }) {
+                selectedShipId = null
+                clearDraft()
+            }
+            val sk = pendingSkill
+            if (sk != null && availableSkills.none { it.shipId == sk.shipId && it.kind == sk.kind }) {
+                clearDraft()
+            }
+        }
         Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            view.skills.forEach { s ->
+            availableSkills.forEach { s ->
                 ChipButton(
                     s.label + if (s.enabled) "" else " · ${s.reason}",
                     pendingSkill?.shipId == s.shipId && pendingSkill?.kind == s.kind,
@@ -324,7 +356,7 @@ fun BattleScreen(vm: GameViewModel, state: UiState) {
                 }
             }
         }
-        InfoLine("主炮齐射需点 2 个坐标；十字类技能可重复覆盖；单点攻击自动排除已打过的格子。")
+        InfoLine("主炮齐射需点 2 个坐标；鱼雷机需点「起点 + 同行/同列航向点」共 2 点；范围伤害可重复覆盖；单点攻击自动排除已打过的格子。")
 
         Row(modifier = Modifier.fillMaxWidth()) {
             OutlinedButton(
