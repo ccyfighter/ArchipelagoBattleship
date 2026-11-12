@@ -54,7 +54,9 @@ fun BoardCanvas(
             .pointerInput(board.size, interactive) {
                 if (!interactive) return@pointerInput
                 detectTapGestures { off ->
-                    val cw = (size.minDimension.toFloat() - pad) / board.size
+                    // PointerInputScope.size is IntSize (no minDimension); DrawScope.size is Size.
+                    val side: Float = minOf(size.width, size.height).toFloat()
+                    val cw: Float = (side - pad) / board.size.toFloat()
                     if (cw <= 0f) return@detectTapGestures
                     val c = ((off.x - pad) / cw).toInt()
                     val r = ((off.y - pad) / cw).toInt()

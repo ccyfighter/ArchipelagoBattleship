@@ -84,9 +84,13 @@ $gradle = Get-Command gradle -ErrorAction SilentlyContinue
 if ($gradle) {
     $tmp = Join-Path $env:TEMP ('gw_' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+    # Gradle 8.x refuses 'gradle wrapper' in a directory without a build file.
+    [System.IO.File]::WriteAllText((Join-Path $tmp 'settings.gradle'), "rootProject.name = 'wrapper-bootstrap'`n", $utf8)
+    [System.IO.File]::WriteAllText((Join-Path $tmp 'build.gradle'), "`n", $utf8)
     Push-Location $tmp
     try {
         & $gradle.Source wrapper --gradle-version 8.7 --distribution-type bin --no-daemon | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "gradle wrapper exited with code $LASTEXITCODE" }
         Copy-Item -LiteralPath (Join-Path $tmp 'gradlew') -Destination (Join-Path $Root 'gradlew') -Force
         Copy-Item -LiteralPath (Join-Path $tmp 'gradlew.bat') -Destination (Join-Path $Root 'gradlew.bat') -Force
         Copy-Item -LiteralPath (Join-Path $tmp 'gradle\wrapper\gradle-wrapper.jar') -Destination (Join-Path $wrapperDir 'gradle-wrapper.jar') -Force

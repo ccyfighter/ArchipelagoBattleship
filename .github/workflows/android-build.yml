@@ -89,18 +89,36 @@ jobs:
         run: |
           set -e
           mkdir -p "$RUNNER_TEMP/gw"
-          ( cd "$RUNNER_TEMP/gw" && gradle wrapper --gradle-version 8.7 --distribution-type bin --no-daemon )
-          mkdir -p "$GITHUB_WORKSPACE/gradle/wrapper"
-          cp "$RUNNER_TEMP/gw/gradlew" "$GITHUB_WORKSPACE/gradlew"
-          cp "$RUNNER_TEMP/gw/gradlew.bat" "$GITHUB_WORKSPACE/gradlew.bat"
-          cp "$RUNNER_TEMP/gw/gradle/wrapper/gradle-wrapper.jar" "$GITHUB_WORKSPACE/gradle/wrapper/gradle-wrapper.jar"
-          cp "$RUNNER_TEMP/gw/gradle/wrapper/gradle-wrapper.properties" "$GITHUB_WORKSPACE/gradle/wrapper/gradle-wrapper.properties"
-          chmod +x "$GITHUB_WORKSPACE/gradlew"
+          printf "rootProject.name = 'wrapper-bootstrap'\n" > "$RUNNER_TEMP/gw/settings.gradle"
+          : > "$RUNNER_TEMP/gw/build.gradle"
+          if ( cd "$RUNNER_TEMP/gw" && gradle wrapper --gradle-version 8.7 --distribution-type bin --no-daemon ); then
+            if [ -f "$RUNNER_TEMP/gw/gradle/wrapper/gradle-wrapper.jar" ]; then
+              mkdir -p "$GITHUB_WORKSPACE/gradle/wrapper"
+              cp "$RUNNER_TEMP/gw/gradlew" "$GITHUB_WORKSPACE/gradlew"
+              cp "$RUNNER_TEMP/gw/gradlew.bat" "$GITHUB_WORKSPACE/gradlew.bat"
+              cp "$RUNNER_TEMP/gw/gradle/wrapper/gradle-wrapper.jar" "$GITHUB_WORKSPACE/gradle/wrapper/gradle-wrapper.jar"
+              cp "$RUNNER_TEMP/gw/gradle/wrapper/gradle-wrapper.properties" "$GITHUB_WORKSPACE/gradle/wrapper/gradle-wrapper.properties"
+              chmod +x "$GITHUB_WORKSPACE/gradlew"
+              echo "Gradle Wrapper generated successfully."
+            else
+              echo "WARNING: wrapper jar missing; build step will use system Gradle."
+            fi
+          else
+            echo "WARNING: gradle wrapper task failed; build step will use system Gradle."
+          fi
 
       - name: Build Debug APK
         run: |
           set +e
-          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee build.log
+          if [ -f gradlew ] && [ -f gradle/wrapper/gradle-wrapper.jar ]; then
+            chmod +x ./gradlew
+            BUILD="./gradlew"
+          else
+            echo "===== WRAPPER UNAVAILABLE, FALLING BACK TO SYSTEM GRADLE 8.7 ====="
+            BUILD="gradle"
+          fi
+          echo "Build command: $BUILD assembleDebug"
+          $BUILD assembleDebug --no-daemon --stacktrace 2>&1 | tee build.log
           code=${PIPESTATUS[0]}
           echo "==================== KOTLIN ERRORS ===================="
           grep -E "^e: " build.log || echo "(none)"
