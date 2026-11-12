@@ -35,6 +35,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.archipelago.battleship.data.qr.QrCodec
+import com.archipelago.battleship.domain.engine.Rules
 import com.archipelago.battleship.domain.model.ChatMessage
 import com.archipelago.battleship.domain.model.RoomPhase
 import com.archipelago.battleship.domain.model.Side
@@ -90,7 +91,7 @@ fun LobbyScreen(vm: GameViewModel, state: UiState) {
             }
         )
         InfoLine(state.connection)
-        InfoLine("地图：${view.config.size}×${view.config.size} · ${if (view.config.mountains) "自动生成对称山地" else "纯海无山"}")
+        InfoLine("地图：${view.config.size}×${view.config.size} · ${if (view.config.mountains) "随机群岛（≤20%）" else "纯海无山"}")
         InfoLine("房主 ${view.hostName}${if (view.hostReady) " ✔已准备" else " …未准备"}   ｜   客机 ${view.guestName}${if (view.guestReady) " ✔已准备" else " …未准备"}")
         Spacer(Modifier.height(6.dp))
 
@@ -119,20 +120,21 @@ fun LobbyScreen(vm: GameViewModel, state: UiState) {
         SectionTitle("房主规则配置")
         if (canConfigure) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                ChipButton("10×10", view.config.size == 10) { vm.setConfig(10, false) }
-                ChipButton("12×12", view.config.size == 12) { vm.setConfig(12, view.config.mountains) }
+                ChipButton("10×10 快棋", view.config.size == 10) { vm.setConfig(10, false) }
+                ChipButton("12×12 标准", view.config.size == 12) { vm.setConfig(12, view.config.mountains) }
+                ChipButton("14×14 大战场", view.config.size == 14) { vm.setConfig(14, view.config.mountains) }
             }
-            if (view.config.size == 12) {
+            if (view.config.size >= 12) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(
                         checked = view.config.mountains,
-                        onCheckedChange = { vm.setConfig(12, it) }
+                        onCheckedChange = { vm.setConfig(view.config.size, it) }
                     )
-                    Text("自动生成山地（取消勾选 = 纯海无山）", fontSize = 13.sp)
+                    Text("随机群岛（取消勾选 = 纯海无山）", fontSize = 13.sp)
                 }
-                InfoLine("山地不可部署 / 不可攻击 / 阻挡鱼雷；紧贴山地 1 圈为近岸浅滩，3~5 格大舰与潜艇禁入。")
+                InfoLine("3~6 座随机小岛，单岛 1~6 格，可贴边角，总面积 ≤20%；山地不可部署 / 攻击 / 阻挡鱼雷，周边 1 圈浅滩禁停 3~5 格大舰与潜艇。")
             }
-            InfoLine("改动规则会实时同步给客机，并重置双方准备状态与布阵。")
+            InfoLine("每回合阶段二最多 ${Rules.BASE_ATTACKS_PER_TURN} 次攻击（且不超过存活舰船数）；改动规则会实时同步并重置双方准备与布阵。")
         } else {
             InfoLine("由房主设置，配置变动会实时同步到这里。")
         }

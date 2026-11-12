@@ -18,10 +18,14 @@ class GameEngine(config: GameConfig = GameConfig()) {
     private var seq = 1L
     private var revision = 1L
 
+    /** 本回合内的操作快照：只能撤回/重做自己当前回合的行动，换手时清空。 */
+    private val undoStack = ArrayList<Pair<Side, GameState>>()
+    private val redoStack = ArrayList<Pair<Side, GameState>>()
+
     init {
         val board = Rules.buildBoard(config, emptyList())
         state = state.copy(players = state.players.map { it.copy(board = board) })
-        log(LogKind.SYSTEM, "战前大厅已就绪：房主可切换 10×10 / 12×12 与山地，双方编成 5+4+3+2+1 舰队后点准备")
+        log(LogKind.SYSTEM, "战前大厅已就绪：房主可切换 10×10 / 12×12 / 14×14 与随机群岛，双方编成 5+4+3+2+1 舰队后点准备")
     }
 
     /* ==================== 通用工具 ==================== */
@@ -67,6 +71,8 @@ class GameEngine(config: GameConfig = GameConfig()) {
 
     fun dispatch(side: Side, action: GameAction): Boolean {
         val before = revision
+        val snapshot = state
+        val signature = battleSignature()
         when (action) {
             is GameAction.SetName -> setName(side, action.name)
             is GameAction.SetConfig -> setConfig(side, action)
@@ -78,9 +84,53 @@ class GameEngine(config: GameConfig = GameConfig()) {
             is GameAction.Skill -> useSkill(side, action)
             GameAction.SkipTactical -> skipTactical(side)
             GameAction.EndTurn -> endTurn(side)
+            GameAction.Undo -> undo(side)
+            GameAction.Redo -> redo(side)
             is GameAction.Chat -> sendChat(side, action)
         }
+        if (isBattleStep(action) && battleSignature() != signature) {
+            undoStack.add(side to snapshot)
+            if (undoStack.size > 40) undoStack.removeAt(0)
+            redoStack.clear()
+        }
         return revision != before
+    }
+
+    /** 只比较真正影响战局的部分，避免"非法操作只写了一条提示日志"也被压进撤销栈。 */
+    private fun battleSignature(): List<Any?> = listOf(
+        state.phase, state.round, state.turn, state.turnPhase, state.result,
+        state.players.map { it.board },
+        state.players.map { it.actedShipIds },
+        state.players.map { it.tacticalUsed },
+        state.players.map { it.cooldowns },
+        state.players.map { it.useCounts }
+    )
+
+    private fun isBattleStep(a: GameAction): Boolean =
+        a is GameAction.Fire || a is GameAction.Skill || a is GameAction.SkipTactical
+
+    private fun undo(side: Side) {
+        if (state.turn != side) return
+        if (state.phase != RoomPhase.IN_BATTLE && state.phase != RoomPhase.POST_BATTLE_LOBBY) return
+        val idx = undoStack.indexOfLast { it.first == side }
+        if (idx < 0) return
+        val snap = undoStack.removeAt(idx).second
+        redoStack.add(side to state)
+        state = snap
+        revision++
+        log(LogKind.SYSTEM, "已撤回上一步操作：可重新选择舰船与目标")
+    }
+
+    private fun redo(side: Side) {
+        if (state.turn != side) return
+        if (state.phase != RoomPhase.IN_BATTLE && state.phase != RoomPhase.POST_BATTLE_LOBBY) return
+        val idx = redoStack.indexOfLast { it.first == side }
+        if (idx < 0) return
+        val snap = redoStack.removeAt(idx).second
+        undoStack.add(side to state)
+        state = snap
+        revision++
+        log(LogKind.SYSTEM, "已重做上一步操作")
     }
 
     private fun setName(side: Side, name: String) {
@@ -96,8 +146,8 @@ class GameEngine(config: GameConfig = GameConfig()) {
             return
         }
         if (state.phase == RoomPhase.IN_BATTLE) return
-        val size = if (a.size == 12) 12 else 10
-        val mountains = size == 12 && a.mountains
+        val size = when (a.size) { 14 -> 14; 12 -> 12; else -> 10 }
+        val mountains = size >= 12 && a.mountains
         if (state.config.size == size && state.config.mountains == mountains) return
         val cfg = GameConfig(size, mountains, Random.nextLong(1L, 1_000_000_000L))
         val fresh = Rules.buildBoard(cfg, emptyList())
@@ -120,7 +170,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
         revision++
         log(
             LogKind.SYSTEM,
-            "房主调整地图：${size}×${size} · ${if (mountains) "自动生成对称山地" else "纯海无山"}；地形已重算，双方需重新布阵"
+            "房主调整地图：${size}×${size} · ${if (mountains) "随机群岛（总面积≤20%）" else "纯海无山"}；地形已重算，双方需重新布阵"
         )
     }
 
@@ -254,6 +304,8 @@ class GameEngine(config: GameConfig = GameConfig()) {
     }
 
     private fun beginTurn(side: Side) {
+        undoStack.clear()
+        redoStack.clear()
         val pending = state.players[side.ordinal].pendingStrike
         if (pending != null && pending.placedRound < state.round) {
             applyCross(
@@ -438,6 +490,15 @@ class GameEngine(config: GameConfig = GameConfig()) {
             log(LogKind.INFO, "该舰本回合已行动")
             return
         }
+        if (state.turnPhase != TurnPhase.ATTACK) {
+            log(LogKind.INFO, "请先点击「进入阶段二 · 开始攻击」，再选择开火坐标")
+            return
+        }
+        val budget = Rules.attacksPerTurn(me.board.ships.count { !it.sunk })
+        if (me.actedShipIds.size >= budget) {
+            log(LogKind.INFO, "本回合 $budget 次攻击名额已用尽，请点击「结束回合」")
+            return
+        }
         val enemy = side.other()
         val eb = boardOf(enemy)
         val t = a.target
@@ -452,10 +513,6 @@ class GameEngine(config: GameConfig = GameConfig()) {
         if (t in eb.attackedPoints) {
             log(LogKind.INFO, "该坐标已攻击过（单点攻击去重），请换一个格子")
             return
-        }
-        if (state.turnPhase == TurnPhase.TACTICAL) {
-            state = state.copy(turnPhase = TurnPhase.ATTACK)
-            revision++
         }
         val aliveCount = me.board.ships.count { !it.sunk }
         val lastGun = ship.type == ShipType.CARRIER && aliveCount == 1
@@ -494,10 +551,6 @@ class GameEngine(config: GameConfig = GameConfig()) {
             target.c > center.c -> 1
             target.c < center.c -> -1
             else -> 0
-        }
-        if (state.turnPhase == TurnPhase.TACTICAL) {
-            state = state.copy(turnPhase = TurnPhase.ATTACK)
-            revision++
         }
         val enemy = side.other()
         var board = boardOf(enemy)
@@ -547,6 +600,15 @@ class GameEngine(config: GameConfig = GameConfig()) {
         } else {
             if (ship.id in me.actedShipIds) {
                 log(LogKind.INFO, "该舰本回合已行动")
+                return
+            }
+            if (state.turnPhase != TurnPhase.ATTACK) {
+                log(LogKind.INFO, "请先点击「进入阶段二 · 开始攻击」，再释放攻击技能")
+                return
+            }
+            val budget = Rules.attacksPerTurn(me.board.ships.count { !it.sunk })
+            if (me.actedShipIds.size >= budget) {
+                log(LogKind.INFO, "本回合 $budget 次攻击名额已用尽")
                 return
             }
         }
@@ -688,10 +750,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 cooldowns = if (cd > 0) p.cooldowns + (k to (state.round + cd)) else p.cooldowns
             )
         }
-        if (tactical) {
-            state = state.copy(turnPhase = TurnPhase.ATTACK)
-            revision++
-        }
+        // 战术技能释放后仍停留在阶段一，由玩家显式点击「进入阶段二」推进，不自动跳转。
         checkGameOver()
     }
 
@@ -751,6 +810,8 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 s.turn != side -> "等待对方回合"
                 tactical && (s.turnPhase != TurnPhase.TACTICAL || p.tacticalUsed) -> "阶段一已结束"
                 !tactical && ship.id in p.actedShipIds -> "该舰本回合已行动"
+                !tactical && s.turnPhase != TurnPhase.ATTACK -> "需先进入阶段二"
+                !tactical && p.actedShipIds.size >= Rules.attacksPerTurn(p.board.ships.count { !it.sunk }) -> "攻击名额已用尽"
                 s.round < Rules.skillMinRound(kind) -> "第 ${Rules.skillMinRound(kind)} 回合起可用"
                 s.round < (p.cooldowns[kind.name] ?: 0) -> "冷却中（第 ${p.cooldowns[kind.name]} 回合可用）"
                 used >= Rules.skillLimit(kind) -> "全局次数已用尽"
@@ -792,7 +853,11 @@ class GameEngine(config: GameConfig = GameConfig()) {
             log = s.log,
             chat = s.chat,
             result = s.result,
-            revision = revision
+            revision = revision,
+            canUndo = undoStack.any { it.first == side },
+            canRedo = redoStack.any { it.first == side },
+            attackBudget = Rules.attacksPerTurn(me.board.ships.count { !it.sunk }),
+            attackUsed = me.actedShipIds.size
         )
     }
 

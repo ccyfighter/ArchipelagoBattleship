@@ -475,4 +475,8 @@ class GameViewModel : ViewModel() {
     fun skipTactical() = dispatch(GameAction.SkipTactical)
 
     fun endTurn() = dispatch(GameAction.EndTurn)
+
+    fun undo() = dispatch(GameAction.Undo)
+
+    fun redo() = dispatch(GameAction.Redo)
 }

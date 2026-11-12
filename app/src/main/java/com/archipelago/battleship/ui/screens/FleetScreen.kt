@@ -73,7 +73,7 @@ fun FleetScreen(vm: GameViewModel, state: UiState) {
             .padding(12.dp)
     ) {
         SectionTitle("舰队编成 · 5+4+3+2+1 五舰制（每档二选一，1 格默认炮艇）")
-        InfoLine("地图 ${cfg.size}×${cfg.size} · ${if (cfg.mountains) "有对称山地" else "纯海"} · 已布置 ${placements.size}/5 艘")
+        InfoLine("地图 ${cfg.size}×${cfg.size} · ${if (cfg.mountains) "随机群岛" else "纯海"} · 已布置 ${placements.size}/5 艘")
         if (error.isNotEmpty()) {
             Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
         }

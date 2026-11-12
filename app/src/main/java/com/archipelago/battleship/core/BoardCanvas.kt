@@ -36,6 +36,8 @@ fun BoardCanvas(
     interactive: Boolean = false,
     legalTargets: List<Coord> = emptyList(),
     highlight: Coord? = null,
+    pathCells: List<Coord> = emptyList(),
+    markers: List<Coord> = emptyList(),
     onTap: (Coord) -> Unit = {}
 ) {
     val pal = palette(mode)
@@ -136,6 +138,15 @@ fun BoardCanvas(
             )
         }
 
+        // 可攻击候选格：淡色底 + 中心瞄准点（不再把整张非候选区域涂暗）。
+        if (interactive && legalTargets.isNotEmpty()) {
+            for (c in legalTargets) {
+                if (!c.inBounds(n)) continue
+                drawRect(pal.legal, topLeft = topLeft(c), size = Size(cell, cell))
+                drawCircle(pal.accent.copy(alpha = 0.80f), radius = max(1.5f, cell * 0.07f), center = center(c))
+            }
+        }
+
         val nc = drawContext.canvas.nativeCanvas
         val colPaint = Paint().apply {
             color = pal.label.toArgb()
@@ -155,24 +166,6 @@ fun BoardCanvas(
         }
         for (i in 0 until n) {
             nc.drawText((i + 1).toString(), pad - 4f, pad + (i + 0.62f) * cell, rowPaint)
-        }
-
-        if (interactive && legalTargets.isNotEmpty()) {
-            val legal = legalTargets.toHashSet()
-            for (r in 0 until n) {
-                for (c in 0 until n) {
-                    val cc = Coord(r, c)
-                    if (cc in legal) {
-                        drawCircle(pal.legal, radius = max(1.5f, cell * 0.07f), center = center(cc))
-                    } else {
-                        drawRect(
-                            pal.label.copy(alpha = 0.16f),
-                            topLeft = topLeft(cc),
-                            size = Size(cell, cell)
-                        )
-                    }
-                }
-            }
         }
 
         for (ship in board.ships) {
@@ -204,11 +197,24 @@ fun BoardCanvas(
             }
         }
 
+        // 攻击结果：每个被打过的格子都有底色 + 图形 + 文字标签。
         val lastByCell = HashMap<Coord, ShotResult>()
         for (s in board.shots) lastByCell[s.at] = s.result
+        val lastShot = board.shots.lastOrNull()
+        val markPaint = Paint().apply {
+            textSize = max(8f, cell * 0.24f)
+            textAlign = Paint.Align.CENTER
+            isAntiAlias = true
+        }
         for ((c, res) in lastByCell) {
             val ctr = center(c)
+            val tl = topLeft(c)
             val q = cell * 0.30f
+            drawRect(
+                pal.label.copy(alpha = if (mode == AppThemeMode.PAPER) 0.08f else 0.13f),
+                topLeft = tl,
+                size = Size(cell, cell)
+            )
             when (res) {
                 ShotResult.MISS -> {
                     if (mode == AppThemeMode.PAPER) {
@@ -218,18 +224,81 @@ fun BoardCanvas(
                         drawCircle(pal.miss.copy(alpha = 0.85f), radius = max(2f, cell * 0.10f), center = ctr)
                         drawCircle(pal.miss.copy(alpha = 0.32f), radius = q, center = ctr, style = Stroke(1f))
                     }
+                    markPaint.color = pal.miss.toArgb()
+                    nc.drawText("o", ctr.x, ctr.y + cell * 0.62f, markPaint)
                 }
                 ShotResult.HIT, ShotResult.SUNK -> {
+                    drawRect(pal.hit.copy(alpha = 0.18f), topLeft = tl, size = Size(cell, cell))
                     val sw = max(2f, cell * 0.09f)
                     drawLine(pal.hit, Offset(ctr.x - q, ctr.y - q), Offset(ctr.x + q, ctr.y + q), strokeWidth = sw)
                     drawLine(pal.hit, Offset(ctr.x + q, ctr.y - q), Offset(ctr.x - q, ctr.y + q), strokeWidth = sw)
                     if (res == ShotResult.SUNK) {
                         drawCircle(pal.hit, radius = q * 1.45f, center = ctr, style = Stroke(sw))
+                        drawRect(pal.hit, topLeft = tl, size = Size(cell, cell), style = Stroke(sw))
                     }
+                    markPaint.color = pal.hit.toArgb()
+                    nc.drawText(if (res == ShotResult.SUNK) "S" else "X", ctr.x, ctr.y - cell * 0.40f, markPaint)
                 }
                 ShotResult.INTERCEPTED, ShotResult.IMMUNE, ShotResult.BLOCKED -> {
-                    drawCircle(pal.label.copy(alpha = 0.55f), radius = max(2f, cell * 0.09f), center = ctr)
+                    val c2 = if (res == ShotResult.INTERCEPTED) pal.select else pal.label
+                    drawCircle(c2.copy(alpha = 0.18f), radius = q * 1.15f, center = ctr)
+                    drawLine(c2, Offset(ctr.x - q, ctr.y + q), Offset(ctr.x + q, ctr.y - q), strokeWidth = max(2f, cell * 0.07f))
+                    drawLine(c2, Offset(ctr.x - q * 0.5f, ctr.y), Offset(ctr.x + q * 0.5f, ctr.y), strokeWidth = 1.5f)
+                    markPaint.color = c2.toArgb()
+                    nc.drawText(
+                        if (res == ShotResult.INTERCEPTED) "AA" else "-",
+                        ctr.x, ctr.y + cell * 0.62f, markPaint
+                    )
                 }
+            }
+        }
+
+        // 最新一击：随雷达扫描呼吸的粗边框。
+        if (lastShot != null) {
+            val pulse = 0.45f + 0.35f * kotlin.math.abs(kotlin.math.sin(Math.toRadians(sweep.toDouble()))).toFloat()
+            drawRect(
+                pal.select.copy(alpha = pulse),
+                topLeft = topLeft(lastShot.at),
+                size = Size(cell, cell),
+                style = Stroke(max(2f, cell * 0.10f))
+            )
+        }
+
+        // 技能多选：目标序号框。
+        for ((i, m) in markers.withIndex()) {
+            drawRect(pal.select, topLeft = topLeft(m), size = Size(cell, cell), style = Stroke(max(2f, cell * 0.09f)))
+            markPaint.color = pal.select.toArgb()
+            nc.drawText((i + 1).toString(), center(m).x - cell * 0.34f, center(m).y - cell * 0.30f, markPaint)
+        }
+
+        // 潜艇鱼雷：从潜艇中心指向所选方向的路径与箭头。
+        if (pathCells.size >= 2) {
+            val a = center(pathCells.first())
+            val b = center(pathCells.last())
+            val lw = max(2f, cell * 0.10f)
+            drawLine(pal.select.copy(alpha = 0.85f), a, b, strokeWidth = lw)
+            for (p in pathCells.drop(1).dropLast(1)) {
+                drawCircle(pal.select, radius = max(2f, cell * 0.08f), center = center(p))
+            }
+            val dx = b.x - a.x
+            val dy = b.y - a.y
+            val len = kotlin.math.sqrt(dx * dx + dy * dy)
+            if (len > 0f) {
+                val ux = dx / len
+                val uy = dy / len
+                val px = -uy
+                val py = ux
+                val s = cell * 0.28f
+                drawLine(
+                    pal.select, b,
+                    Offset(b.x - ux * s + px * s * 0.6f, b.y - uy * s + py * s * 0.6f),
+                    strokeWidth = lw
+                )
+                drawLine(
+                    pal.select, b,
+                    Offset(b.x - ux * s - px * s * 0.6f, b.y - uy * s - py * s * 0.6f),
+                    strokeWidth = lw
+                )
             }
         }
 
@@ -238,7 +307,7 @@ fun BoardCanvas(
                 pal.select,
                 topLeft = topLeft(highlight),
                 size = Size(cell, cell),
-                style = Stroke(max(2f, cell * 0.08f))
+                style = Stroke(max(2f, cell * 0.10f))
             )
         }
     }

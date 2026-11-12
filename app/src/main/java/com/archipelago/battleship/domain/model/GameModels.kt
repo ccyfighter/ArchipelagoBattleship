@@ -204,8 +204,8 @@ data class FleetConfig(
 
 @Serializable
 data class GameConfig(
-    val size: Int = 10,
-    val mountains: Boolean = false,
+    val size: Int = 12,
+    val mountains: Boolean = true,
     val seed: Long = 1L
 )
 
@@ -363,6 +363,14 @@ sealed class GameAction {
     object EndTurn : GameAction()
 
     @Serializable
+    @SerialName("undo")
+    object Undo : GameAction()
+
+    @Serializable
+    @SerialName("redo")
+    object Redo : GameAction()
+
+    @Serializable
     @SerialName("chat")
     data class Chat(val text: String, val emoji: Boolean = false) : GameAction()
 }
@@ -404,5 +412,9 @@ data class GameView(
     val log: List<LogEntry>,
     val chat: List<ChatMessage>,
     val result: BattleResult?,
-    val revision: Long
+    val revision: Long,
+    val canUndo: Boolean = false,
+    val canRedo: Boolean = false,
+    val attackBudget: Int = 3,
+    val attackUsed: Int = 0
 )

@@ -4,13 +4,53 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
+    <!-- 声呐雷达外圈 -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,20 L78,30 L88,54 L78,78 L54,88 L30,78 L20,54 L30,30 Z"
+        android:strokeColor="#FF35E0C0"
+        android:strokeWidth="2" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,32 L70,38 L76,54 L70,70 L54,76 L38,70 L32,54 L38,38 Z"
+        android:strokeColor="#8035E0C0"
+        android:strokeWidth="1.5" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M24,54 L84,54 M54,24 L54,84"
+        android:strokeColor="#5535E0C0"
+        android:strokeWidth="1" />
+
+    <!-- 扫描线 -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,54 L79,37"
+        android:strokeColor="#FF35E0C0"
+        android:strokeWidth="3" />
+
+    <!-- 群岛剪影 -->
+    <path
+        android:fillColor="#802F8C7A"
+        android:pathData="M26,75 L37,59 L48,75 Z" />
+    <path
+        android:fillColor="#662F8C7A"
+        android:pathData="M62,77 L71,65 L80,77 Z" />
+
+    <!-- 战舰：矩形船体 + 三角舰首 + 双斜杠（战列舰标识） -->
     <path
         android:fillColor="#FF35E0C0"
-        android:pathData="M54,22 L86,76 L22,76 Z" />
+        android:pathData="M34,47 L65,47 L77,54 L65,61 L34,61 Z" />
     <path
-        android:fillColor="#FFF4EBD9"
-        android:pathData="M51,42 L57,42 L57,66 L51,66 Z" />
+        android:fillColor="#00000000"
+        android:pathData="M44,59 L50,49 M53,59 L59,49"
+        android:strokeColor="#FF0B192C"
+        android:strokeWidth="2.5" />
+
+    <!-- 命中叉 -->
     <path
-        android:fillColor="#FFF4EBD9"
-        android:pathData="M40,70 L68,70 L68,73 L40,73 Z" />
+        android:fillColor="#00000000"
+        android:pathData="M74,26 L82,34 M82,26 L74,34"
+        android:strokeColor="#FFFFC107"
+        android:strokeWidth="3" />
 </vector>

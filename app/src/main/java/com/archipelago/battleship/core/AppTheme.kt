@@ -65,10 +65,14 @@ fun ArchipelagoTheme(mode: AppThemeMode, content: @Composable () -> Unit) {
             primary = Color(0xFF35E0C0),
             onPrimary = Color(0xFF052018),
             secondary = Color(0xFFFF8A65),
+            tertiary = Color(0xFFFFC107),
             background = Color(0xFF0B192C),
             onBackground = Color(0xFFD5F2EA),
             surface = Color(0xFF12263F),
             onSurface = Color(0xFFD5F2EA),
+            surfaceVariant = Color(0xFF17334F),
+            onSurfaceVariant = Color(0xFF9FD8CC),
+            outline = Color(0xFF3A6E78),
             error = Color(0xFFFF6B4A)
         )
     } else {
@@ -76,10 +80,14 @@ fun ArchipelagoTheme(mode: AppThemeMode, content: @Composable () -> Unit) {
             primary = Color(0xFF1F4E79),
             onPrimary = Color(0xFFFFFFFF),
             secondary = Color(0xFFB23B3B),
+            tertiary = Color(0xFFC77B22),
             background = Color(0xFFF4EBD9),
             onBackground = Color(0xFF1B3350),
             surface = Color(0xFFFFFCF3),
             onSurface = Color(0xFF1B3350),
+            surfaceVariant = Color(0xFFEADFC5),
+            onSurfaceVariant = Color(0xFF4A5E70),
+            outline = Color(0xFF9AA9B4),
             error = Color(0xFFC0392B)
         )
     }

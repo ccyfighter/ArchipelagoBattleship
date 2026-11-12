@@ -22,6 +22,14 @@ object Rules {
 
     const val TURN_SECONDS = 180
 
+    /** 每回合阶段二的攻击名额上限（同时不得超过存活舰船数）。 */
+    const val BASE_ATTACKS_PER_TURN = 3
+
+    /** 山地总面积占全图的最大比例。 */
+    const val MOUNTAIN_MAX_RATIO = 0.20f
+
+    fun attacksPerTurn(aliveShips: Int): Int = minOf(aliveShips, BASE_ATTACKS_PER_TURN)
+
     fun cellsOf(origin: Coord, size: Int, o: Orientation): List<Coord> {
         val out = ArrayList<Coord>(size)
         for (i in 0 until size) {
@@ -44,56 +52,61 @@ object Rules {
         return value
     }
 
+    /** 单座岛的相对形状：1~6 格，尺寸与轮廓都随机，不强制连片、不强制对称。 */
+    private val ISLAND_SHAPES: List<List<Coord>> = listOf(
+        listOf(Coord(0, 0)),
+        listOf(Coord(0, 0), Coord(0, 1)),
+        listOf(Coord(0, 0), Coord(1, 0)),
+        listOf(Coord(0, 0), Coord(0, 1), Coord(0, 2)),
+        listOf(Coord(0, 0), Coord(0, 1), Coord(0, 2), Coord(1, 0), Coord(1, 1), Coord(1, 2)),
+        listOf(Coord(0, 0), Coord(0, 1), Coord(1, 0), Coord(1, 1)),
+        listOf(Coord(0, 0), Coord(0, 1), Coord(1, 0), Coord(1, 1)),
+        listOf(Coord(0, 0), Coord(1, 0), Coord(1, 1)),
+        listOf(Coord(0, 0), Coord(0, 1), Coord(1, 1), Coord(2, 1)),
+        listOf(Coord(0, 0), Coord(0, 1), Coord(1, 0), Coord(1, 1), Coord(2, 0), Coord(2, 1)),
+        listOf(Coord(0, 0), Coord(0, 1), Coord(1, 0), Coord(1, 1), Coord(2, 0), Coord(2, 1))
+    )
+
     private fun generateTerrain(config: GameConfig): Pair<Set<Coord>, Set<Coord>> {
-        if (!config.mountains || config.size != 12) {
+        if (!config.mountains || config.size < 12) {
             return emptySet<Coord>() to emptySet<Coord>()
         }
+        val n = config.size
         val rnd = Random(config.seed)
-        val count = if (rnd.nextBoolean()) 3 else 4
+        val hardLimit = (n * n * MOUNTAIN_MAX_RATIO).toInt().coerceAtLeast(1)
+        val goal = (hardLimit * (0.85f + rnd.nextFloat() * 0.15f)).toInt().coerceAtLeast(4)
+        val islandCount = 3 + rnd.nextInt(4) + (n - 12) // 12:3~6 座，14:5~8 座
         val mountains = LinkedHashSet<Coord>()
-        val mirror: (Coord) -> Coord = { Coord(config.size - 1 - it.r, config.size - 1 - it.c) }
 
-        fun tooClose(cells: List<Coord>): Boolean = cells.any { n ->
-            mountains.any { m -> abs(m.r - n.r) <= 1 && abs(m.c - n.c) <= 1 }
-        }
-
-        val pairs = count / 2
-        var placedPairs = 0
+        var placed = 0
         var tries = 0
-        while (placedPairs < pairs && tries < 500) {
+        while (placed < islandCount && mountains.size < goal && tries < 900) {
             tries++
-            val square = rnd.nextBoolean()
-            val r = 1 + rnd.nextInt(4)
-            val c = 1 + rnd.nextInt(config.size - 3)
-            val cells = ArrayList<Coord>()
-            cells.add(Coord(r, c))
-            if (square) {
-                cells.add(Coord(r, c + 1))
-                cells.add(Coord(r + 1, c))
-                cells.add(Coord(r + 1, c + 1))
-            } else {
-                cells.add(Coord(r, c + 1))
+            val shape = ISLAND_SHAPES[rnd.nextInt(ISLAND_SHAPES.size)]
+            val h = shape.maxOf { it.r } + 1
+            val w = shape.maxOf { it.c } + 1
+            if (h > n || w > n) continue
+            // r0 / c0 从 0 起算：允许岛屿贴边、落在四角。
+            val r0 = rnd.nextInt(n - h + 1)
+            val c0 = rnd.nextInt(n - w + 1)
+            val cells = shape.map { Coord(r0 + it.r, c0 + it.c) }
+            if (cells.any { !it.inBounds(n) }) continue
+            if (cells.size > hardLimit - mountains.size) continue
+            // 与已有山地保持 1 格间隔，避免所有岛连成一整块。
+            val touches = cells.any { cell ->
+                mountains.any { m -> maxOf(abs(m.r - cell.r), abs(m.c - cell.c)) <= 1 }
             }
-            val mirrored = cells.map(mirror)
-            val union = cells + mirrored
-            if (union.any { !it.inBounds(config.size) }) continue
-            if (union.distinct().size != union.size) continue
-            if (tooClose(cells) || tooClose(mirrored)) continue
-            mountains.addAll(union)
-            placedPairs++
-        }
-
-        if (count % 2 == 1) {
-            val center = listOf(Coord(5, 5), Coord(5, 6), Coord(6, 5), Coord(6, 6))
-            if (!tooClose(center)) mountains.addAll(center)
+            if (touches) continue
+            mountains.addAll(cells)
+            placed++
         }
 
         val shallows = LinkedHashSet<Coord>()
         for (m in mountains) {
             for (dr in -1..1) {
                 for (dc in -1..1) {
-                    val n = Coord(m.r + dr, m.c + dc)
-                    if (n.inBounds(config.size) && n !in mountains) shallows.add(n)
+                    val p = Coord(m.r + dr, m.c + dc)
+                    if (p.inBounds(n) && p !in mountains) shallows.add(p)
                 }
             }
         }

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -31,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import com.archipelago.battleship.core.AppThemeMode
 import com.archipelago.battleship.ui.GameViewModel
 import com.archipelago.battleship.ui.UiState
+import com.archipelago.battleship.ui.components.GameLogo
 import com.archipelago.battleship.ui.components.InfoLine
 import com.archipelago.battleship.ui.components.SectionTitle
 
@@ -46,7 +48,9 @@ fun HomeScreen(vm: GameViewModel, state: UiState) {
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(12.dp))
+        GameLogo(modifier = Modifier.size(136.dp))
+        Spacer(Modifier.height(8.dp))
         Text(
             "群岛海战棋",
             style = MaterialTheme.typography.headlineMedium,

@@ -29,6 +29,7 @@ class AiEngine(private val rnd: Random = Random.Default) {
             if (engine.state.phase != RoomPhase.IN_BATTLE || engine.state.turn != side) break
             val view = engine.viewFor(side)
             val acted = engine.state.players[side.ordinal].actedShipIds
+            if (acted.size >= Rules.attacksPerTurn(view.myBoard.ships.count { !it.sunk })) break
             val ship = view.myBoard.ships.firstOrNull { !it.sunk && it.id !in acted } ?: break
             val legal = view.legalTargets
             if (legal.isEmpty()) break
