@@ -55,26 +55,11 @@ private fun torpedoCandidates(ship: Ship, enemy: Board): List<Coord> {
     for (step in 1..4) {
         for (d in listOf(Coord(-1, 0), Coord(1, 0), Coord(0, -1), Coord(0, 1))) {
             val c = Coord(c0.r + d.r * step, c0.c + d.c * step)
-            if (c.inBounds(enemy.size) && c !in enemy.mountains && c !in enemy.attackedPoints) out.add(c)
+            // 只定方向：鱼雷会穿过已打过的格子（沿途不再写攻击记录），所以这里不再排除 attackedPoints
+            if (c.inBounds(enemy.size) && c !in enemy.mountains) out.add(c)
         }
     }
     return out.distinct()
-}
-
-/** 从潜艇中心沿所选方向推进到目标，用于棋盘上的路径线 + 箭头。 */
-private fun torpedoPath(ship: Ship, target: Coord): List<Coord> {
-    val c0 = subCenter(ship)
-    val dr = when { target.r > c0.r -> 1; target.r < c0.r -> -1; else -> 0 }
-    val dc = when { target.c > c0.c -> 1; target.c < c0.c -> -1; else -> 0 }
-    if (dr == 0 && dc == 0) return emptyList()
-    val out = ArrayList<Coord>()
-    out.add(c0)
-    for (step in 1..4) {
-        val c = Coord(c0.r + dr * step, c0.c + dc * step)
-        out.add(c)
-        if (c == target) break
-    }
-    return out
 }
 
 @Composable
@@ -116,12 +101,7 @@ fun BattleScreen(vm: GameViewModel, state: UiState) {
     else if (sub == null) emptyList()
     else if (sub.type == ShipType.SUBMARINE) torpedoCandidates(sub, view.enemyBoard)
     else view.legalTargets
-    // 鱼雷机不预览航线：只保留起点 / 航向点的序号框，棋盘上不画轨迹。
-    val path: List<Coord> = when {
-        sub != null && sub.type == ShipType.SUBMARINE && pt != null && showEnemy ->
-            torpedoPath(sub, pt)
-        else -> emptyList()
-    }
+    // 两种鱼雷都不画航线：棋盘上只保留「定方向点」的高亮与序号框。
     val highlight: Coord? = when {
         skillTargets.isNotEmpty() -> skillTargets.last()
         pt != null && showEnemy -> pt
@@ -233,13 +213,13 @@ fun BattleScreen(vm: GameViewModel, state: UiState) {
         val hint = when {
             pendingSkill?.kind == SkillKind.TORPEDO_BOMBER ->
                 if (skillTargets.isEmpty())
-                    "鱼雷机：第 1 点点投雷起点，第 2 点点同行/同列一格定航向；鱼雷沿航向最多推进 3 格，在「碰到敌舰 / 撞山前一格 / 射程尽头」单点爆炸，不显示轨迹"
+                    "鱼雷机：第 1 点点投雷起点（须在敌方防空圈外），第 2 点点同行/同列一格只定航向；鱼雷最多推进 3 格，在「碰到敌舰 / 撞山前一格 / 射程尽头」单点爆炸，沿途不留轨迹、中间格仍可再打"
                 else
-                    "鱼雷机：已选起点 ${coordLabel(skillTargets[0])}，再点同行/同列一格定航向（已选 ${skillTargets.size}/$need）；只显示选点，不画航线"
+                    "鱼雷机：已选起点 ${coordLabel(skillTargets[0])}，再点同行/同列一格定航向（已选 ${skillTargets.size}/$need）；起点在 AA 圈外即可打击防空舰，只显示选点、不画航线"
             pendingSkill != null ->
                 "技能【${pendingSkill!!.label}】已选 ${skillTargets.size}/$need：${skillTargets.joinToString("、") { coordLabel(it) }}；点棋盘可改，按「确认释放」才生效"
             sub != null && sub.type == ShipType.SUBMARINE ->
-                "潜艇鱼雷：只能沿潜艇中心 ${coordLabel(subCenter(sub))} 的同行 / 同列 4 格内发射，棋盘已高亮方向与路径"
+                "潜艇鱼雷：以中心 ${coordLabel(subCenter(sub))} 为准，点同行 / 同列 4 格内任意格只定航向；鱼雷最多推进 4 格，在「碰到敌舰 / 撞山前一格 / 射程尽头」单点爆炸，不画航线、中间格仍可再打"
             sub != null ->
                 "已选【${FleetCatalog.label(sub.type)}】· ${if (pt != null) "暂存目标 ${coordLabel(pt)}" else "点击敌方海域格子选择目标"}；确认前可反复修改"
             else -> "先选择一艘开火舰船，或选择一个技能"
@@ -256,7 +236,6 @@ fun BattleScreen(vm: GameViewModel, state: UiState) {
             interactive = myTurn,
             legalTargets = if (showEnemy) candidates else emptyList(),
             highlight = if (showEnemy) highlight else null,
-            pathCells = path,
             markers = skillTargets,
             modifier = Modifier.fillMaxWidth().padding(2.dp),
             onTap = { onTap(it) }
@@ -364,7 +343,8 @@ fun BattleScreen(vm: GameViewModel, state: UiState) {
                 }
             }
         }
-        InfoLine("主炮齐射需点 2 个坐标；鱼雷机需点「起点 + 同行/同列航向点」共 2 点，只在爆炸点结算且判定与潜航鱼雷相同（可命中水下潜艇），不显示轨迹；单点攻击自动排除已打过的格子。")
+        InfoLine("主炮齐射需点 2 个坐标；鱼雷机需点「起点 + 同行/同列航向点」共 2 点，起点在防空圈外即可打击 AA 舰。两种鱼雷都只在一个点爆炸、只结算一次（可命中水下潜艇），沿途不留轨迹、不锁格，中间格后续仍可用火炮打击；单点攻击自动排除已打过的格子。")
+        InfoLine("战报情报：命中只播报「击中」，不公开被击中的舰种；只有击沉才报舰种。射击记录中的舰种字段也不会随联机状态下发。")
 
         Spacer(Modifier.height(8.dp))
         Row(modifier = Modifier.fillMaxWidth()) {

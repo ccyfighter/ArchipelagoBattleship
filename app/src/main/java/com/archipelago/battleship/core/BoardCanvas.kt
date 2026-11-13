@@ -45,7 +45,6 @@ fun BoardCanvas(
     interactive: Boolean = false,
     legalTargets: List<Coord> = emptyList(),
     highlight: Coord? = null,
-    pathCells: List<Coord> = emptyList(),
     markers: List<Coord> = emptyList(),
     onTap: (Coord) -> Unit = {}
 ) {
@@ -522,39 +521,9 @@ fun BoardCanvas(
             nc.drawText((i + 1).toString(), badge.x, badge.y + cell * 0.085f, labelPaint)
         }
 
-        // ---------- 13. 鱼雷 / 鱼雷机航线 ----------
-        if (pathCells.size >= 2) {
-            val a = center(pathCells.first())
-            val b = center(pathCells.last())
-            val lw = max(2f, cell * 0.10f)
-            drawLine(pal.select.copy(alpha = 0.22f), a, b, strokeWidth = lw * 2.4f)
-            drawLine(pal.select.copy(alpha = 0.95f), a, b, strokeWidth = lw)
-            for (p in pathCells.drop(1).dropLast(1)) {
-                drawCircle(pal.select, radius = max(2f, cell * 0.07f), center = center(p))
-            }
-            val dx = b.x - a.x
-            val dy = b.y - a.y
-            val len = kotlin.math.sqrt(dx * dx + dy * dy)
-            if (len > 0f) {
-                val ux = dx / len
-                val uy = dy / len
-                val px = -uy
-                val py = ux
-                val s = cell * 0.28f
-                drawLine(
-                    pal.select, b,
-                    Offset(b.x - ux * s + px * s * 0.6f, b.y - uy * s + py * s * 0.6f),
-                    strokeWidth = lw
-                )
-                drawLine(
-                    pal.select, b,
-                    Offset(b.x - ux * s - px * s * 0.6f, b.y - uy * s - py * s * 0.6f),
-                    strokeWidth = lw
-                )
-            }
-        }
-
-        // ---------- 14. 当前预览目标：粗框 + 四角大括号 ----------
+        // ---------- 13. 当前预览目标：粗框 + 四角大括号 ----------
+        // 两种鱼雷都不再绘制航线：整条推进线会把潜艇所在行 / 列直接画给对手看，
+        // 现在棋盘只保留「定方向点」的高亮框，爆炸结果只出现在唯一爆炸格。
         if (highlight != null && highlight.inBounds(n)) {
             val tl = topLeft(highlight)
             drawRect(

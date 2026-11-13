@@ -507,10 +507,12 @@ class GameEngine(config: GameConfig = GameConfig()) {
         val ships = board.ships.map { if (it.id == ship.id) updated else it }
         val result = if (updated.sunk) ShotResult.SUNK else ShotResult.HIT
         val nb = board.copy(ships = ships).record(at, result, by, ship.type, mark)
+        // 战报情报规则：只有「击沉」才公开舰种；单纯命中一律只说「击中」，
+        // 否则全局广播的 log 会直接告诉对手打中了他哪一艘船。
         val text = when {
             updated.sunk && periscopeHit -> "命中【潜望镜】${FleetCatalog.label(ship.type)}，整艇直接沉没！"
             updated.sunk -> "击沉敌方 ${FleetCatalog.label(ship.type)}！"
-            else -> "命中敌方 ${FleetCatalog.label(ship.type)}"
+            else -> "击中"
         }
         return ShotReport(nb, result, text, LogKind.HIT, true, ship.type)
     }
@@ -566,15 +568,18 @@ class GameEngine(config: GameConfig = GameConfig()) {
      *      可命中水下潜艇、不受炮艇「灵活规避」影响）；
      *   ② 前方是山地时，取撞山前的那一格；投雷起点即山地则空袭无效；
      *   ③ 到达最长射程的最后一格。
-     * 战机本身仍受整条航线的防空区拦截：被击落则整次空袭失效。
+     * 【AA 圈外视距打击】防空判定只看「投雷起点」这一个部署点：
+     * 飞机只要没有飞进防空圈就能投雷，即便鱼雷的爆炸点落在 AA 舰 / 航母身上也照常结算。
+     * 这样才能用 3 格射程从圈外打击防空舰，而不是让整条航线把战机判死。
      */
     private fun applyTorpedoBomberLine(side: Side, line: List<Coord>) {
         val enemy = side.other()
         var board = boardOf(enemy)
-        if (intercepted(board, line)) {
-            board = board.record(line.first(), ShotResult.INTERCEPTED, side, null, false)
+        val start = line.first()
+        if (intercepted(board, listOf(start))) {
+            board = board.record(start, ShotResult.INTERCEPTED, side, null, false)
             setBoard(enemy, board)
-            log(LogKind.AA, "【防空拦截】战机被击落，鱼雷机空袭全部失效 @${coordLabel(line.first())}")
+            log(LogKind.AA, "【防空拦截】投雷起点 ${coordLabel(start)} 位于敌方防空圈内，战机被击落，空袭失效")
             return
         }
         var impact = line.last()
@@ -666,6 +671,15 @@ class GameEngine(config: GameConfig = GameConfig()) {
         checkGameOver()
     }
 
+    /**
+     * 潜航鱼雷：玩家点的坐标只用来「定航向」，鱼雷沿该方向最多推进 4 格，
+     * 只找唯一爆炸点、只结算一次伤害：
+     *   ① 碰到的第一艘未沉敌舰所在格；② 前方是山地时取撞山前一格；③ 都没遇到则射程尽头一格。
+     *
+     * 沿途不写 ShotRecord、不写 attackedPoints、不画轨迹，棋盘上只留爆炸点一个标记，
+     * 路径中间的格子后续仍可被火炮正常打击；日志也不再播报潜艇中心坐标，
+     * 对手无法顺着一串水花反推出潜望镜所在格，「射后强制上浮」才重新有意义。
+     */
     private fun fireTorpedo(side: Side, ship: Ship, target: Coord) {
         val center = if (ship.cells.size > 1) ship.cells[1] else ship.cells[0]
         if (target.r != center.r && target.c != center.c) {
@@ -688,23 +702,38 @@ class GameEngine(config: GameConfig = GameConfig()) {
         }
         val enemy = side.other()
         var board = boardOf(enemy)
-        log(LogKind.SKILL, "${nameOf(side)} · 潜艇【潜航鱼雷】自 ${coordLabel(center)} 沿直线发射，最多推进 4 格")
+        val line = ArrayList<Coord>(4)
+        var blockedByMountain = false
         for (step in 1..4) {
-            val cur = Coord(center.r + dr * step, center.c + dc * step)
-            if (!cur.inBounds(board.size)) break
-            if (cur in board.mountains) {
-                log(LogKind.INFO, "鱼雷被山地阻挡，停止于 ${coordLabel(cur)}")
+            val c = Coord(center.r + dr * step, center.c + dc * step)
+            if (!c.inBounds(board.size)) break
+            if (c in board.mountains) {
+                blockedByMountain = true
                 break
             }
-            if (cur in board.attackedPoints) {
-                log(LogKind.INFO, "鱼雷在已攻击过的格子处停止：${coordLabel(cur)}")
-                break
+            line.add(c)
+        }
+        // 只说发射、不说从哪一格发射：这是全局广播日志，坐标等于直接交出潜艇位置
+        log(LogKind.SKILL, "${nameOf(side)} 发射【潜航鱼雷】，沿直线最多推进 4 格")
+        if (line.isEmpty()) {
+            log(LogKind.INFO, "【潜航鱼雷】前方即山地或棋盘边缘，本次发射无效果")
+        } else {
+            var impact = line.last()
+            var reason = if (blockedByMountain) "撞山前" else "到达最大射程"
+            for (c in line) {
+                if (board.ships.any { s -> !s.sunk && c in s.cells }) {
+                    impact = c
+                    reason = "发现目标"
+                    break
+                }
             }
-            val rep = applyShot(board, cur, AttackKind.TORPEDO, side, ShipType.SUBMARINE, ignoresAA = true, mark = true)
+            val rep = applyShot(
+                board, impact, AttackKind.TORPEDO, side,
+                ShipType.SUBMARINE, ignoresAA = true, mark = false
+            )
             board = rep.board
-            log(rep.kind, "鱼雷 ${coordLabel(cur)}：${rep.text}")
+            log(rep.kind, "【潜航鱼雷】$reason，于 ${coordLabel(impact)} 爆炸：${rep.text}")
             if (rep.damage) addDamage(side, ShipType.SUBMARINE)
-            if (rep.result == ShotResult.HIT || rep.result == ShotResult.SUNK) break
         }
         setBoard(enemy, board)
         updatePlayer(side) { it.copy(subSurfaceNextTurn = true) }
@@ -866,7 +895,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 }
                 log(
                     LogKind.SKILL,
-                    "${nameOf(side)} 派出【鱼雷机空袭】@${coordLabel(line.first())}：沿航向投雷，最多推进 ${line.size} 格，只在爆炸点结算，不显示轨迹"
+                    "${nameOf(side)} 派出【鱼雷机空袭】@${coordLabel(line.first())}：投雷起点在防空圈外即可实施视距外打击，最多推进 ${line.size} 格，只在爆炸点结算、不显示轨迹"
                 )
                 applyTorpedoBomberLine(side, line)
             }
@@ -979,7 +1008,20 @@ class GameEngine(config: GameConfig = GameConfig()) {
         val s = state
         val me = s.players[side.ordinal]
         val enemy = s.players[side.other().ordinal]
-        val redacted = enemy.board.copy(ships = enemy.board.ships.filter { it.sunk })
+        // 战报情报脱敏：ShotRecord.shipType（被击中舰种）/ attacker（开火舰种）
+        // 一律不下发，命中只以「击中」呈现；击沉信息由已沉舰 ships / enemySunkTypes 公开。
+        // engine 内部 state 保持完整，【上浮暴露复核】等逻辑完全不受影响。
+        val cleanShots = { shots: List<ShotRecord> ->
+            shots.map { rec ->
+                if (rec.shipType == null && rec.attacker == null) rec
+                else rec.copy(shipType = null, attacker = null)
+            }
+        }
+        val redacted = enemy.board.copy(
+            ships = enemy.board.ships.filter { it.sunk },
+            shots = cleanShots(enemy.board.shots)
+        )
+        val myBoardView = me.board.copy(shots = cleanShots(me.board.shots))
         return GameView(
             viewer = side,
             phase = s.phase,
@@ -993,7 +1035,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
             guestReady = s.players[1].ready,
             hostFleet = s.players[0].fleet,
             guestFleet = s.players[1].fleet,
-            myBoard = me.board,
+            myBoard = myBoardView,
             enemyBoard = redacted,
             enemySunkTypes = enemy.board.ships.filter { it.sunk }.map { it.type },
             myAlive = me.board.ships.filter { !it.sunk }.map { it.type },
