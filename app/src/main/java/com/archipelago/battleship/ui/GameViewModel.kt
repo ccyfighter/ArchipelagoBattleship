@@ -30,7 +30,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.random.Random
 
 enum class Screen { HOME, LOBBY, FLEET, BATTLE, SCANNER }
@@ -58,19 +57,40 @@ data class UiState(
  * - LOCAL / HOST：本地持有权威 GameEngine，所有 GameAction 直接 dispatch。
  * - HOST：另起 ServerSocket + NSD，把 viewFor(B) 通过 Packet.State 推给客机。
  * - GUEST：没有引擎，只把 GameAction 打包发给房主，渲染房主下发的脱敏 GameView。
+ *
+ * 联机可靠性约定（v5）：
+ * 1) 身份 / 密钥 / 客机在线标志全部放成员变量，不读易被覆盖的 UiState；
+ * 2) 所有 UI 写入走 updateUi 原子读-改-写，网络回调统一切主线程；
+ * 3) 握手 Assign 直接携带第一份完整 GameView，客机不必再等独立 State 帧；
+ * 4) 客机可随时发 Packet.Sync 索要多轮全量状态，房主每次收到 Action 必回 State；
+ * 5) 序列化 / 解析失败显式上报，不再静默丢帧。
  */
 class GameViewModel : ViewModel() {
 
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
+    private val uiLock = Any()
+
+    /** 跨线程统一入口：避免 IO 线程与主线程各自做 value = value.copy(...) 丢更新。 */
+    private fun updateUi(block: (UiState) -> UiState) {
+        synchronized(uiLock) { _ui.value = block(_ui.value) }
+    }
+
     private var engine: GameEngine? = null
     private var ai: AiEngine? = null
     private var endpoint: LanEndpoint? = null
     private var nsd: NsdDiscovery? = null
     private var timerJob: Job? = null
+    private var syncJob: Job? = null
     private var turnKey: Triple<RoomPhase, Int, Side>? = null
     private var aiRunning = false
+
+    private var role: Mode = Mode.LOCAL
+    private var mySide: Side = Side.A
+    private var roomKey: String = ""
+    private var joinKey: String = ""
+    private var guestConnected: Boolean = false
 
     /* ---------------- 生命周期 ---------------- */
 
@@ -82,6 +102,8 @@ class GameViewModel : ViewModel() {
     private fun cleanup() {
         timerJob?.cancel()
         timerJob = null
+        syncJob?.cancel()
+        syncJob = null
         turnKey = null
         aiRunning = false
         try {
@@ -96,60 +118,72 @@ class GameViewModel : ViewModel() {
         nsd = null
         engine = null
         ai = null
+        role = Mode.LOCAL
+        mySide = Side.A
+        roomKey = ""
+        joinKey = ""
+        guestConnected = false
     }
 
     /* ---------------- 导航 / 外观 ---------------- */
 
     fun navigate(screen: Screen) {
-        _ui.value = _ui.value.copy(screen = screen)
+        updateUi { it.copy(screen = screen) }
     }
 
     fun toggleTheme() {
-        _ui.value = _ui.value.copy(
-            theme = if (_ui.value.theme == AppThemeMode.PAPER) AppThemeMode.SONAR else AppThemeMode.PAPER
-        )
+        updateUi {
+            it.copy(theme = if (it.theme == AppThemeMode.PAPER) AppThemeMode.SONAR else AppThemeMode.PAPER)
+        }
     }
 
     fun showManualJoin(show: Boolean) {
-        _ui.value = _ui.value.copy(manualJoin = show)
+        updateUi { it.copy(manualJoin = show) }
     }
 
     fun openScanner() {
-        _ui.value = _ui.value.copy(screen = Screen.SCANNER)
+        updateUi { it.copy(screen = Screen.SCANNER) }
     }
 
     fun closeScanner() {
-        _ui.value = _ui.value.copy(screen = Screen.HOME)
+        updateUi { it.copy(screen = Screen.HOME) }
     }
 
     fun consumeToast() {
-        _ui.value = _ui.value.copy(toast = "")
+        updateUi { it.copy(toast = "") }
     }
 
     private fun toast(message: String) {
-        _ui.value = _ui.value.copy(toast = message)
+        updateUi { it.copy(toast = message) }
     }
 
     fun leaveRoom() {
+        if (role == Mode.HOST && endpoint?.peerAttached == true) {
+            endpoint?.send(Packet.Bye)
+        }
         cleanup()
-        _ui.value = UiState(theme = _ui.value.theme)
+        updateUi { UiState(theme = it.theme) }
     }
 
     /* ---------------- 三种入口 ---------------- */
 
     fun startLocal() {
         cleanup()
+        role = Mode.LOCAL
+        mySide = Side.A
         val cfg = GameConfig(seed = Random.nextLong(1L, 1_000_000_000L))
         val e = GameEngine(cfg)
         engine = e
         ai = AiEngine()
-        _ui.value = UiState(
-            screen = Screen.LOBBY,
-            mode = Mode.LOCAL,
-            theme = _ui.value.theme,
-            mySide = Side.A,
-            connection = "单机模式 · AI 指挥官已入房（完全断网可用）"
-        )
+        updateUi {
+            UiState(
+                screen = Screen.LOBBY,
+                mode = Mode.LOCAL,
+                theme = it.theme,
+                mySide = Side.A,
+                connection = "单机模式 · AI 指挥官已入房（完全断网可用）"
+            )
+        }
         e.dispatch(Side.B, GameAction.SetName("AI 指挥官"))
         e.autoPrepare(Side.B, cfg.seed + 7)
         publish()
@@ -158,37 +192,42 @@ class GameViewModel : ViewModel() {
     fun createRoom(context: Context) {
         cleanup()
         val key = Random.nextInt(100000, 999999).toString()
+        role = Mode.HOST
+        mySide = Side.A
+        roomKey = key
+        guestConnected = false
         val cfg = GameConfig(seed = Random.nextLong(1L, 1_000_000_000L))
         val e = GameEngine(cfg)
         engine = e
         val link = LanEndpoint(
-            onPacket = { p -> handlePacket(p) },
-            onConnected = {
-                viewModelScope.launch { _ui.value = _ui.value.copy(connection = "客机已连入，等待握手…") }
-            },
-            onClosed = { msg -> onLinkClosed(msg) }
+            onPacket = { p -> onNetworkPacket(p) },
+            onConnected = { onNetworkConnected() },
+            onClosed = { msg -> onLinkClosed(msg) },
+            onMalformed = { msg -> onWireProblem(msg) }
         )
         endpoint = link
         val port = link.host()
         val ip = LanIp.best()
         val address = RoomAddress(ip, port, key)
-        _ui.value = UiState(
-            screen = Screen.LOBBY,
-            mode = Mode.HOST,
-            theme = _ui.value.theme,
-            mySide = Side.A,
-            roomAddress = address.encode(),
-            roomKey = key,
-            connection = "房间 $ip:$port · 密钥 $key · 等待客机加入"
-        )
+        updateUi {
+            UiState(
+                screen = Screen.LOBBY,
+                mode = Mode.HOST,
+                theme = it.theme,
+                mySide = Side.A,
+                roomAddress = address.encode(),
+                roomKey = key,
+                connection = "房间 $ip:$port · 密钥 $key · 等待客机加入"
+            )
+        }
         publish()
         val d = NsdDiscovery(context.applicationContext)
         nsd = d
         d.register(key, port) { ok, msg ->
-            viewModelScope.launch {
-                _ui.value = _ui.value.copy(
-                    connection = if (ok) "房间已广播（mDNS）：$ip:$port · 密钥 $key" else msg
-                )
+            // mDNS 注册回调常晚于客机连入，别把「客机已加入」覆盖掉
+            updateUi {
+                if (it.guestConnected) it
+                else it.copy(connection = if (ok) "房间已广播（mDNS）：$ip:$port · 密钥 $key" else msg)
             }
         }
     }
@@ -197,27 +236,27 @@ class GameViewModel : ViewModel() {
         nsd?.stopAll()
         val d = NsdDiscovery(context.applicationContext)
         nsd = d
-        _ui.value = _ui.value.copy(discovering = true, discovered = emptyList(), connection = "正在搜索附近房间…")
+        updateUi { it.copy(discovering = true, discovered = emptyList(), connection = "正在搜索附近房间…") }
         d.discover(
             onFound = { room ->
-                viewModelScope.launch {
-                    val cur = _ui.value.discovered
-                    if (cur.none { it.key == room.key }) {
-                        _ui.value = _ui.value.copy(
-                            discovered = cur + room,
-                            connection = "已发现 ${cur.size + 1} 个房间"
+                val cur = _ui.value.discovered
+                if (cur.none { r -> r.key == room.key }) {
+                    updateUi {
+                        it.copy(
+                            discovered = it.discovered + room,
+                            connection = "已发现 ${it.discovered.size + 1} 个房间"
                         )
                     }
                 }
             },
-            onError = { msg -> viewModelScope.launch { toast(msg) } }
+            onError = { msg -> toast(msg) }
         )
     }
 
     fun stopDiscovery() {
         nsd?.stopAll()
         nsd = null
-        _ui.value = _ui.value.copy(discovering = false, connection = "已停止搜索")
+        updateUi { it.copy(discovering = false, connection = "已停止搜索") }
     }
 
     fun joinFound(room: FoundRoom) = connectGuest(room.ip, room.port, room.key)
@@ -239,157 +278,254 @@ class GameViewModel : ViewModel() {
             toast("格式：IP:端口:房间密钥，或直接粘贴二维码文本")
             return
         }
-        _ui.value = _ui.value.copy(manualJoin = false)
+        updateUi { it.copy(manualJoin = false) }
         connectGuest(address.ip, address.port, address.key)
     }
 
     fun onScanResult(raw: String) {
         val address = RoomAddress.parse(raw)
         if (address == null) {
-            _ui.value = _ui.value.copy(screen = Screen.HOME)
+            updateUi { it.copy(screen = Screen.HOME) }
             toast("这不是本游戏的房间二维码")
             return
         }
-        _ui.value = _ui.value.copy(screen = Screen.HOME)
+        updateUi { it.copy(screen = Screen.HOME) }
         connectGuest(address.ip, address.port, address.key)
     }
 
     private fun connectGuest(ip: String, port: Int, key: String) {
         cleanup()
+        role = Mode.GUEST
+        mySide = Side.B
+        joinKey = key
+        guestConnected = false
         val link = LanEndpoint(
-            onPacket = { p -> handlePacket(p) },
-            onConnected = {
-                if (_ui.value.mode == Mode.GUEST) endpoint?.send(Packet.Hello("客机", key))
-            },
-            onClosed = { msg -> onLinkClosed(msg) }
+            onPacket = { p -> onNetworkPacket(p) },
+            onConnected = { onNetworkConnected() },
+            onClosed = { msg -> onLinkClosed(msg) },
+            onMalformed = { msg -> onWireProblem(msg) }
         )
         endpoint = link
-        _ui.value = UiState(
-            screen = Screen.HOME,
-            mode = Mode.GUEST,
-            theme = _ui.value.theme,
-            mySide = Side.B,
-            roomKey = key,
-            connection = "正在连接 $ip:$port …"
-        )
+        updateUi {
+            UiState(
+                screen = Screen.HOME,
+                mode = Mode.GUEST,
+                theme = it.theme,
+                mySide = Side.B,
+                roomKey = key,
+                connection = "正在连接 $ip:$port …"
+            )
+        }
         viewModelScope.launch(Dispatchers.IO) {
             val ok = link.join(ip, port)
-            if (!ok) {
-                withContext(Dispatchers.Main) {
-                    toast("连不上房主，请确认两机在同一 Wi-Fi / 热点且 IP 正确")
-                }
+            if (!ok) toast("连不上房主，请确认两机在同一 Wi-Fi / 热点且 IP 正确")
+        }
+    }
+
+    /* ---------------- 连接回调 ---------------- */
+
+    private fun onNetworkPacket(p: Packet) {
+        // Socket 读线程 -> 主线程；所有状态变更集中在一个线程内完成
+        viewModelScope.launch { handlePacket(p) }
+    }
+
+    private fun onNetworkConnected() {
+        when (role) {
+            Mode.GUEST -> {
+                // 直接用加入时保存的密钥，不再读可能被覆盖的 UiState.mode
+                endpoint?.send(Packet.Hello("客机", joinKey))
+                updateUi { it.copy(connection = "已连上房主，正在握手（密钥 $joinKey）…") }
             }
+            Mode.HOST -> updateUi { it.copy(connection = "客机已连入，等待握手…") }
+            Mode.LOCAL -> Unit
         }
     }
 
     private fun onLinkClosed(message: String) {
-        viewModelScope.launch {
-            _ui.value = _ui.value.copy(connection = "连接已断开")
-            toast(message)
-        }
+        guestConnected = false
+        updateUi { it.copy(connection = "连接已断开：$message", guestConnected = false) }
+        toast(message)
+    }
+
+    private fun onWireProblem(message: String) {
+        updateUi { it.copy(connection = "联机诊断：$message") }
+        toast("联机异常：$message")
     }
 
     /* ---------------- 收包 ---------------- */
 
-    private fun handlePacket(packet: Packet) {
-        when (packet) {
+    private fun handlePacket(p: Packet) {
+        when (p) {
             is Packet.Hello -> {
-                if (_ui.value.mode != Mode.HOST) return
-                if (packet.key != _ui.value.roomKey) {
-                    endpoint?.send(Packet.ServerError("房间密钥不匹配"))
+                if (role != Mode.HOST) return
+                val e = engine ?: return
+                if (p.key != roomKey) {
+                    // 密钥不匹配也要回一个明确的拒绝，客机才不会静默卡在首页
+                    endpoint?.send(
+                        Packet.Assign(
+                            false, Side.B, e.state.config,
+                            "房间密钥不匹配（客机 ${p.key} / 房主 $roomKey）"
+                        )
+                    )
+                    updateUi { it.copy(connection = "已拒绝密钥不匹配的客机：${p.key}") }
                     return
                 }
-                val e = engine ?: return
-                e.dispatch(Side.B, GameAction.SetName(packet.name))
-                endpoint?.send(Packet.Assign(true, Side.B, e.state.config, ""))
-                viewModelScope.launch {
-                    _ui.value = _ui.value.copy(
+                e.dispatch(Side.B, GameAction.SetName(p.name))
+                guestConnected = true
+                val snapshot = e.viewFor(Side.B)
+                endpoint?.send(Packet.Assign(true, Side.B, e.state.config, "", snapshot))
+                updateUi {
+                    it.copy(
                         guestConnected = true,
-                        connection = "客机 ${packet.name} 已加入房间（保持长连接）"
+                        connection = "客机 ${p.name} 已加入 · 初始战况已下发"
                     )
-                    publish()
                 }
+                publish()
             }
 
             is Packet.Assign -> {
-                if (packet.ok) {
-                    _ui.value = _ui.value.copy(
-                        mySide = packet.side,
-                        screen = Screen.LOBBY,
-                        connection = "已加入房间，正在同步战前大厅…"
-                    )
-                    nsd?.stopAll()
-                    nsd = null
-                } else {
-                    toast(packet.reason)
+                if (role != Mode.GUEST) return
+                if (!p.ok) {
+                    val reason = p.reason.ifEmpty { "房主拒绝加入" }
+                    cleanup()
+                    updateUi { UiState(theme = it.theme, toast = "加入失败：$reason") }
+                    return
                 }
+                mySide = p.side
+                updateUi {
+                    it.copy(
+                        mySide = p.side,
+                        screen = Screen.LOBBY,
+                        view = p.view ?: it.view,
+                        connection = "已加入房间（${if (p.side == Side.B) "客机位" else "房主位"}）· 长连接已建立"
+                    )
+                }
+                nsd?.stopAll()
+                nsd = null
+                if (p.view != null) onViewUpdated()
+                // 无论 Assign 有没有带 view，都要一份最新全量状态兜底
+                endpoint?.send(Packet.Sync)
+                startSyncWatch()
             }
 
             is Packet.State -> {
-                _ui.value = _ui.value.copy(view = packet.view)
+                if (role != Mode.GUEST) return
+                val cur = _ui.value.view
+                if (cur != null && p.view.revision < cur.revision) return
+                updateUi { it.copy(view = p.view) }
                 onViewUpdated()
             }
 
             is Packet.Action -> {
-                if (_ui.value.mode == Mode.HOST) {
-                    viewModelScope.launch {
-                        engine?.dispatch(Side.B, packet.action)
-                        publish()
-                    }
-                }
+                if (role != Mode.HOST) return
+                val e = engine ?: return
+                e.dispatch(Side.B, p.action)
+                // 动作即便被规则拒绝也要回状态，否则客机看不到提示、以为点了没反应
+                publish()
             }
 
-            is Packet.Tick -> {
-                _ui.value = _ui.value.copy(timerSeconds = packet.seconds)
+            Packet.Sync -> {
+                if (role == Mode.HOST) publish()
+                Unit
             }
 
-            is Packet.ServerError -> toast(packet.message)
+            is Packet.Tick -> updateUi { it.copy(timerSeconds = p.seconds) }
 
-            Packet.Bye -> toast("房主已关闭房间")
+            is Packet.ServerError -> toast(p.message)
+
+            Packet.Bye -> {
+                cleanup()
+                updateUi { UiState(theme = it.theme, toast = "房主已关闭房间") }
+            }
         }
     }
 
     /* ---------------- 发动作 / 状态下发 ---------------- */
 
     private fun dispatch(action: GameAction) {
-        if (_ui.value.mode == Mode.GUEST) {
-            endpoint?.send(Packet.Action(action))
+        if (role == Mode.GUEST) {
+            val link = endpoint
+            if (link == null || !link.peerAttached) {
+                toast("连接尚未建立，请点『重新同步』或返回首页重新加入")
+                return
+            }
+            if (_ui.value.view == null) {
+                link.send(Packet.Sync)
+                startSyncWatch()
+            }
+            link.send(Packet.Action(action))
             return
         }
         val e = engine ?: return
-        e.dispatch(_ui.value.mySide, action)
+        e.dispatch(mySide, action)
         publish()
     }
 
     private fun publish() {
         val e = engine ?: return
-        val side = _ui.value.mySide
-        _ui.value = _ui.value.copy(view = e.viewFor(side))
-        if (_ui.value.mode == Mode.HOST && _ui.value.guestConnected) {
-            endpoint?.send(Packet.State(e.viewFor(Side.B)))
+        val side = mySide
+        updateUi { it.copy(view = e.viewFor(side)) }
+        if (role == Mode.HOST && guestConnected && endpoint?.peerAttached == true) {
+            val guestView = e.viewFor(Side.B)
+            endpoint?.send(Packet.State(guestView))
         }
         onViewUpdated()
     }
 
+    /** 客机在拿到第一份 view 之前，定时向房主索要状态，避免首帧丢失后死锁。 */
+    private fun startSyncWatch() {
+        syncJob?.cancel()
+        syncJob = viewModelScope.launch {
+            var attempt = 0
+            while (attempt < 6 && role == Mode.GUEST && _ui.value.view == null) {
+                delay(1200)
+                if (role != Mode.GUEST || _ui.value.view != null) break
+                attempt++
+                updateUi { it.copy(connection = "已连入房间，正在向房主请求战况同步…（$attempt/6）") }
+                endpoint?.send(Packet.Sync)
+            }
+            if (role == Mode.GUEST && _ui.value.view == null) {
+                toast("房主未回应状态同步：请确认房间仍开着、两机在同一网络")
+            }
+        }
+    }
+
+    /** 大厅「重新同步」按钮 / 客机主动恢复。 */
+    fun requestSync() {
+        if (role != Mode.GUEST) {
+            toast("当前不是客机模式")
+            return
+        }
+        val link = endpoint
+        if (link == null || !link.peerAttached) {
+            toast("连接已断开，请返回首页重新加入房间")
+            return
+        }
+        link.send(Packet.Sync)
+        updateUi { it.copy(connection = "已向房主请求重新同步战况…") }
+        startSyncWatch()
+    }
+
     private fun onViewUpdated() {
-        val v = _ui.value.view ?: return
-        val screen = _ui.value.screen
+        val s = _ui.value
+        val v = s.view ?: return
+        val screen = s.screen
         if (screen != Screen.SCANNER) {
             if (v.phase == RoomPhase.IN_BATTLE && screen != Screen.BATTLE) {
-                _ui.value = _ui.value.copy(screen = Screen.BATTLE)
+                updateUi { it.copy(screen = Screen.BATTLE) }
             }
             if (v.phase == RoomPhase.ROOM_LOBBY && screen == Screen.BATTLE) {
-                _ui.value = _ui.value.copy(screen = Screen.LOBBY)
+                updateUi { it.copy(screen = Screen.LOBBY) }
             }
         }
         val key = Triple(v.phase, v.round, v.turn)
         if (key != turnKey) {
             turnKey = key
-            if (_ui.value.mode != Mode.GUEST) {
+            if (role != Mode.GUEST) {
                 if (v.phase == RoomPhase.IN_BATTLE) startTimer()
                 else {
                     timerJob?.cancel()
-                    _ui.value = _ui.value.copy(timerSeconds = Rules.TURN_SECONDS)
+                    updateUi { it.copy(timerSeconds = Rules.TURN_SECONDS) }
                 }
             }
         }
@@ -401,16 +537,15 @@ class GameViewModel : ViewModel() {
         timerJob = viewModelScope.launch {
             var sec = Rules.TURN_SECONDS
             while (true) {
-                _ui.value = _ui.value.copy(timerSeconds = sec)
-                if (_ui.value.mode == Mode.HOST && _ui.value.guestConnected) {
-                    endpoint?.send(Packet.Tick(sec))
-                }
+                updateUi { it.copy(timerSeconds = sec) }
+                if (role == Mode.HOST && guestConnected) endpoint?.send(Packet.Tick(sec))
                 delay(1000)
                 sec--
                 if (sec < 0) {
                     val e = engine
-                    if (e != null && _ui.value.mode != Mode.GUEST) {
-                        e.autoRandomAttacks(_ui.value.mySide)
+                    if (e != null && role != Mode.GUEST) {
+                        val turnSide = e.state.turn
+                        e.autoRandomAttacks(turnSide)
                         publish()
                     }
                     break
@@ -420,7 +555,7 @@ class GameViewModel : ViewModel() {
     }
 
     private fun maybeRunAi() {
-        if (_ui.value.mode != Mode.LOCAL || aiRunning) return
+        if (role != Mode.LOCAL || aiRunning) return
         val v = _ui.value.view ?: return
         if (v.phase != RoomPhase.IN_BATTLE || v.turn != Side.B) return
         val e = engine ?: return
@@ -437,7 +572,7 @@ class GameViewModel : ViewModel() {
 
     fun setConfig(size: Int, mountains: Boolean) {
         dispatch(GameAction.SetConfig(size, mountains))
-        if (_ui.value.mode == Mode.LOCAL) rePrepareAi()
+        if (role == Mode.LOCAL) rePrepareAi()
     }
 
     fun setFleetAndPlacements(fleet: FleetConfig, placements: List<Placement>) =
@@ -449,7 +584,7 @@ class GameViewModel : ViewModel() {
 
     fun returnToLobby() {
         dispatch(GameAction.ReturnToLobby)
-        if (_ui.value.mode == Mode.LOCAL) rePrepareAi()
+        if (role == Mode.LOCAL) rePrepareAi()
     }
 
     /** 单机模式：地图变化 / 回到房间会清空准备状态，AI 需要重新自动布阵并准备。 */

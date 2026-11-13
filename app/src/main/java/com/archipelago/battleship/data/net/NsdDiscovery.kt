@@ -100,8 +100,11 @@ class NsdDiscovery(context: Context) {
                 resolving = false
                 val ip = serviceInfo.host?.hostAddress
                 val name = serviceInfo.serviceName ?: ""
+                // NsdManager 遇到重名会自行加 " (2)" 之类的后缀，
+                // 直接 removePrefix 会把后缀混进密钥，房主校验必然失败、客机静默卡住。
+                val key = Regex("\\d{6}").find(name)?.value ?: name.removePrefix(PREFIX).trim()
                 if (!ip.isNullOrEmpty()) {
-                    main.post { onFound(FoundRoom(name, ip, serviceInfo.port, name.removePrefix(PREFIX))) }
+                    main.post { onFound(FoundRoom(name, ip, serviceInfo.port, key)) }
                 }
                 main.post { pump(onFound, onError) }
             }

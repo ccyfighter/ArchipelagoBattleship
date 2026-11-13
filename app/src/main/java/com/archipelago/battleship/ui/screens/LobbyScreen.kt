@@ -58,11 +58,27 @@ fun LobbyScreen(vm: GameViewModel, state: UiState) {
     }
 
     if (view == null) {
-        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-            SectionTitle("正在同步房间…")
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp)
+        ) {
+            SectionTitle("正在同步房间战况…")
             InfoLine(state.connection)
-            Spacer(Modifier.height(12.dp))
-            OutlinedButton(onClick = { vm.leaveRoom() }) { Text("返回首页") }
+            InfoLine("身份：${if (state.mode == Mode.GUEST) "客机" else "房主"} · 我方席位：${if (state.mySide == Side.A) "A" else "B"}")
+            Spacer(Modifier.height(10.dp))
+            if (state.mode == Mode.GUEST) {
+                Button(onClick = { vm.requestSync() }, modifier = Modifier.fillMaxWidth()) {
+                    Text("重新向房主同步战况")
+                }
+                Spacer(Modifier.height(8.dp))
+                InfoLine("若一直停在这里：① 两台手机装同一版本 APK；② 房主房间仍开着；③ 两机在同一 Wi-Fi / 热点；④ 必要时让房主重开房间后重新扫码。")
+                Spacer(Modifier.height(8.dp))
+            }
+            OutlinedButton(onClick = { vm.leaveRoom() }, modifier = Modifier.fillMaxWidth()) {
+                Text("返回首页")
+            }
         }
         return
     }

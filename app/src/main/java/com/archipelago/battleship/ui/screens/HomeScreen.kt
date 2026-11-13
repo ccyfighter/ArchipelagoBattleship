@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.archipelago.battleship.core.AppThemeMode
 import com.archipelago.battleship.ui.GameViewModel
+import com.archipelago.battleship.ui.Mode
 import com.archipelago.battleship.ui.UiState
 import com.archipelago.battleship.ui.components.ChipButton
 import com.archipelago.battleship.ui.components.GameLogo
@@ -76,6 +77,16 @@ fun HomeScreen(vm: GameViewModel, state: UiState) {
         SurfaceCard {
             InfoLine(state.connection)
             InfoLine("单机完全离线；联机仅走局域网 / 手机热点，不经过公网服务器。")
+        }
+        if (state.mode == Mode.GUEST) {
+            Spacer(Modifier.height(8.dp))
+            SurfaceCard {
+                InfoLine("客机连接中：${state.connection}")
+                InfoLine("握手成功后会自动进入战前准备大厅；若长时间停留，可取消后重新加入。")
+                OutlinedButton(onClick = { vm.leaveRoom() }, modifier = Modifier.fillMaxWidth()) {
+                    Text("取消连接，返回首页")
+                }
+            }
         }
         Spacer(Modifier.height(8.dp))
 

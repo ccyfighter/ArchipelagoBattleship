@@ -9,6 +9,8 @@ import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
 
 /** 二维码 / NSD 里携带的房间地址，格式 ARCHIPELAGO|1|ip|port|key */
 data class RoomAddress(val ip: String, val port: Int, val key: String) {
@@ -56,27 +58,40 @@ object LanIp {
 }
 
 /**
- * 一个 Socket 长连接端点。房主用 host() 监听 + 接受一个客机，客机用 join() 直连。
- * 所有回调都在 IO 线程触发，调用方自行切回主线程。
+ * 一个 Socket 长连接端点。房主用 host() 监听，客机用 join() 直连。
+ *
+ * 关键点：**所有写操作都投递到专用单线程 outbound**，调用方可以在主线程安全地 send。
+ * Android 的 StrictMode 会在主线程写 Socket 时抛 NetworkOnMainThreadException，
+ * 之前 UI 层直接 send(Packet.State) 会被捕获成「连接已断开」，客机就永远拿不到战况。
+ * 单写线程同时保证帧顺序（Assign 一定先于之后补发的 State）。
  */
 class LanEndpoint(
     private val onPacket: (Packet) -> Unit,
     private val onConnected: () -> Unit,
-    private val onClosed: (String) -> Unit
+    private val onClosed: (String) -> Unit,
+    private val onMalformed: (String) -> Unit = {}
 ) {
     private var server: ServerSocket? = null
     private var socket: Socket? = null
     private var writer: BufferedWriter? = null
     private val lock = Any()
 
+    private val outbound = Executors.newSingleThreadExecutor(
+        ThreadFactory { r -> Thread(r, "archipelago-write").apply { isDaemon = true } }
+    )
+
     @Volatile
     private var running = true
+
+    // 每次 attach 递增，旧读线程退出时不会误报「对端已断开连接」
+    @Volatile
+    private var generation = 0
 
     @Volatile
     var peerAttached: Boolean = false
         private set
 
-    /** 绑定随机端口并开始监听，返回实际端口（二维码 / NSD 用）。 */
+    /** 绑定随机端口并开始监听，返回实际端口（二维码 / NSD 用）。支持客机断线重连。 */
     fun host(): Int {
         val s = ServerSocket(0)
         server = s
@@ -90,16 +105,15 @@ class LanEndpoint(
                     }
                     attach(c)
                     onConnected()
-                    break
                 }
             } catch (e: Exception) {
                 if (running) onClosed("房间监听中断：${e.message}")
             }
-        }, "archipelago-accept").start()
+        }, "archipelago-accept").apply { isDaemon = true }.start()
         return s.localPort
     }
 
-    /** 客机直连房主。 */
+    /** 客机直连房主。调用方应在 IO 线程执行。 */
     fun join(ip: String, port: Int): Boolean = try {
         val c = Socket()
         c.connect(InetSocketAddress(ip, port), 6000)
@@ -113,39 +127,75 @@ class LanEndpoint(
     }
 
     private fun attach(c: Socket) {
-        socket = c
         val w = BufferedWriter(OutputStreamWriter(c.getOutputStream(), Charsets.UTF_8))
         val reader = BufferedReader(InputStreamReader(c.getInputStream(), Charsets.UTF_8))
-        synchronized(lock) { writer = w }
-        peerAttached = true
+        val gen = synchronized(lock) {
+            try {
+                socket?.close()
+            } catch (_: Exception) {
+            }
+            socket = c
+            writer = w
+            peerAttached = true
+            ++generation
+        }
         Thread({
             try {
-                while (running) {
+                while (running && generation == gen) {
                     val line = reader.readLine() ?: break
-                    val packet = Wire.decode(line) ?: continue
+                    if (generation != gen) break
+                    val (packet, error) = Wire.decodeDetailed(line)
+                    if (packet == null) {
+                        onMalformed("数据帧解析失败：${error ?: "未知错误"}｜${line.take(90)}")
+                        continue
+                    }
                     onPacket(packet)
                 }
             } catch (_: Exception) {
             } finally {
-                if (running) onClosed("对端已断开连接")
+                if (running && generation == gen) {
+                    synchronized(lock) { writer = null }
+                    peerAttached = false
+                    onClosed("对端已断开连接")
+                }
             }
-        }, "archipelago-read").start()
+        }, "archipelago-read-$gen").apply { isDaemon = true }.start()
     }
 
-    fun send(packet: Packet) {
-        val w = synchronized(lock) { writer } ?: return
-        try {
-            synchronized(w) {
-                w.write(Wire.encode(packet))
-                w.newLine()
-                w.flush()
-            }
+    /** 可在任意线程调用；返回是否成功投递（不保证对端已收到）。 */
+    fun send(packet: Packet): Boolean {
+        if (!running) return false
+        val text = try {
+            Wire.encode(packet)
         } catch (e: Exception) {
-            onClosed("发送失败：${e.message}")
+            onMalformed("状态序列化失败：${e.message}")
+            return false
+        }
+        return try {
+            outbound.execute {
+                if (running) {
+                    val w = synchronized(lock) { writer }
+                    if (w != null) {
+                        try {
+                            synchronized(w) {
+                                w.write(text)
+                                w.newLine()
+                                w.flush()
+                            }
+                        } catch (e: Exception) {
+                            onClosed("发送失败：${e.message}")
+                        }
+                    }
+                }
+            }
+            true
+        } catch (e: Exception) {
+            false
         }
     }
 
     fun close() {
+        if (!running) return
         running = false
         try {
             socket?.close()
@@ -156,6 +206,7 @@ class LanEndpoint(
         } catch (_: Exception) {
         }
         synchronized(lock) { writer = null }
+        outbound.shutdownNow()
         socket = null
         server = null
         peerAttached = false
