@@ -88,6 +88,10 @@ class GameEngine(config: GameConfig = GameConfig()) {
     private fun isMyTurn(side: Side): Boolean =
         state.phase == RoomPhase.IN_BATTLE && state.turn == side && state.turnPhase != TurnPhase.GAME_OVER
 
+    /**
+     * 只有「真正打出去、且产生判定」的单点攻击才把坐标写进 attackedPoints。
+     * 拦截 / 免疫 / 山地阻挡只是显示标记，绝不封锁坐标：之后仍可由其他舰船对该格开火。
+     */
     private fun Board.record(
         at: Coord,
         r: ShotResult,
@@ -95,10 +99,13 @@ class GameEngine(config: GameConfig = GameConfig()) {
         t: ShipType?,
         mark: Boolean,
         attacker: ShipType? = null
-    ): Board = copy(
-        shots = (shots + ShotRecord(at, r, by, state.round, t, mark, attacker)).takeLast(500),
-        attackedPoints = if (mark) attackedPoints + at else attackedPoints
-    )
+    ): Board {
+        val consumes = mark && (r == ShotResult.MISS || r == ShotResult.HIT || r == ShotResult.SUNK)
+        return copy(
+            shots = (shots + ShotRecord(at, r, by, state.round, t, mark, attacker)).takeLast(500),
+            attackedPoints = if (consumes) attackedPoints + at else attackedPoints
+        )
+    }
 
     private fun markActed(side: Side, shipId: String) =
         updatePlayer(side) { it.copy(actedShipIds = it.actedShipIds + shipId) }
@@ -393,6 +400,9 @@ class GameEngine(config: GameConfig = GameConfig()) {
         redoStack.clear()
         val pending = state.players[side.ordinal].pendingStrike
         if (pending != null && pending.placedRound < state.round) {
+            // 预告标记是纯显示层：生效前先清掉，避免棋盘上一直留着旧十字
+            val eb0 = boardOf(side.other())
+            setBoard(side.other(), eb0.copy(strikeCells = emptySet()))
             applyCross(
                 side, pending.center, AttackKind.LAND_AIR, ShipType.GUNBOAT,
                 ignoresAA = true, disableAAOnHit = false
@@ -505,6 +515,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
         }
     }
 
+    /** 只判定「敌方飞机的部署点」是否落入防空圈；cell 参数只允许传一个点。 */
     private fun intercepted(board: Board, cells: List<Coord>): Boolean {
         for (s in board.ships) {
             if (s.sunk) continue
@@ -583,7 +594,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
         val enemy = side.other()
         var board = boardOf(enemy)
         val cells = crossCells(center, board.size)
-        if (Rules.isAir(kind) && !ignoresAA && intercepted(board, cells)) {
+        if (Rules.isAir(kind) && !ignoresAA && intercepted(board, listOf(center))) {
             board = board.record(center, ShotResult.INTERCEPTED, side, null, false)
             setBoard(enemy, board)
             reportFailed(side, center, "攻击被拦截")
@@ -600,10 +611,13 @@ class GameEngine(config: GameConfig = GameConfig()) {
             reportAttack(side, c, rep)
         }
         if (disableAAOnHit && hitTypes.any { it == ShipType.CARRIER || it == ShipType.AA_CRUISER }) {
+            // 「瘫痪 1 个敌方回合」要落在对手的下一次行动回合上：
+            // A 在同一 round 内先手，B 的下一回合仍是本 round；B 先手时 A 的下一回合是 round+1。
+            val disabledRound = if (side == Side.A) state.round else state.round + 1
             board = board.copy(
                 ships = board.ships.map { s ->
                     if (s.type in hitTypes && (s.type == ShipType.CARRIER || s.type == ShipType.AA_CRUISER))
-                        s.copy(aaDisabledUntil = state.round + 1) else s
+                        s.copy(aaDisabledUntil = disabledRound) else s
                 }
             )
             log(LogKind.SYSTEM, "${nameOf(side)} 的一次攻击造成短暂压制效果")
@@ -622,7 +636,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
      *   ③ 到达最长射程的最后一格。
      * 【AA 圈外视距打击】防空判定只看「投雷起点」这一个部署点：
      * 飞机只要没有飞进防空圈就能投雷，即便鱼雷的爆炸点落在 AA 舰 / 航母身上也照常结算。
-     * 这样才能用 3 格射程从圈外打击防空舰，而不是让整条航线把战机判死。
+     * 航线中间穿过防空区也绝不判战机被击落。
      */
     private fun applyTorpedoBomberLine(side: Side, line: List<Coord>) {
         val enemy = side.other()
@@ -718,6 +732,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
      * 沿途不写 ShotRecord、不写 attackedPoints、不画轨迹，棋盘上只留爆炸点一个标记，
      * 路径中间的格子后续仍可被火炮正常打击；日志也不再播报潜艇中心坐标，
      * 对手无法顺着一串水花反推出潜望镜所在格，「射后强制上浮」才重新有意义。
+     * 前方第一格就是山 / 边界时不视为「已发射」：不消耗该舰行动、不触发强制上浮。
      */
     private fun fireTorpedo(side: Side, ship: Ship, target: Coord) {
         val center = if (ship.cells.size > 1) ship.cells[1] else ship.cells[0]
@@ -742,32 +757,41 @@ class GameEngine(config: GameConfig = GameConfig()) {
         val enemy = side.other()
         var board = boardOf(enemy)
         val line = ArrayList<Coord>(4)
+        var blockedByMountain = false
         for (step in 1..4) {
             val c = Coord(center.r + dr * step, center.c + dc * step)
             if (!c.inBounds(board.size)) break
-            if (c in board.mountains) break
+            if (c in board.mountains) {
+                blockedByMountain = true
+                break
+            }
             line.add(c)
+        }
+        if (line.isEmpty()) {
+            logOwn(side, LogKind.INFO, "本次发射无效果：前方即山地或棋盘边缘，未消耗行动")
+            return
         }
         // 发射细节只回给操作者：一旦全局广播「有鱼雷出击」，对手就能从炸点反推发射源
         logOwn(side, LogKind.SKILL, "已发射潜航鱼雷，沿直线最多推进 4 格")
-        if (line.isEmpty()) {
-            logOwn(side, LogKind.INFO, "本次发射无效果：前方即山地或棋盘边缘")
-        } else {
-            var impact = line.last()
-            for (c in line) {
-                if (board.ships.any { s -> !s.sunk && c in s.cells }) {
-                    impact = c
-                    break
-                }
+        // 爆炸点：优先第一艘敌舰；否则前方有山就落在撞山前一格（即 line 末格）；
+        // 都没遇到则落在射程尽头一格。三种情况统一收敛为「只在一个格结算一次」。
+        var impact = line.last()
+        for (c in line) {
+            if (board.ships.any { s -> !s.sunk && c in s.cells }) {
+                impact = c
+                break
             }
-            val rep = applyShot(
-                board, impact, AttackKind.TORPEDO, side,
-                ShipType.SUBMARINE, ignoresAA = true, mark = false
-            )
-            board = rep.board
-            reportAttack(side, impact, rep)
-            if (rep.damage) addDamage(side, ShipType.SUBMARINE)
         }
+        if (blockedByMountain) {
+            logOwn(side, LogKind.INFO, "航线前方有山地遮挡，鱼雷在撞山前一格 ${coordLabel(line.last())} 引爆")
+        }
+        val rep = applyShot(
+            board, impact, AttackKind.TORPEDO, side,
+            ShipType.SUBMARINE, ignoresAA = true, mark = false
+        )
+        board = rep.board
+        reportAttack(side, impact, rep)
+        if (rep.damage) addDamage(side, ShipType.SUBMARINE)
         setBoard(enemy, board)
         updatePlayer(side) { it.copy(subSurfaceNextTurn = true) }
         markActed(side, ship.id)
@@ -821,24 +845,38 @@ class GameEngine(config: GameConfig = GameConfig()) {
             logOwn(side, LogKind.INFO, "【${Rules.skillLabel(kind)}】全局次数已用尽")
             return
         }
-        val center = a.targets.firstOrNull() ?: run {
-            logOwn(side, LogKind.INFO, "缺少目标坐标")
-            return
-        }
-        if (!center.inBounds(boardOf(side.other()).size)) {
-            logOwn(side, LogKind.INFO, "目标坐标越界")
-            return
+        val need = Rules.skillTargetCount(kind)
+        val center = a.targets.firstOrNull() ?: Coord(0, 0)
+        if (need > 0) {
+            if (a.targets.isEmpty()) {
+                logOwn(side, LogKind.INFO, "缺少目标坐标")
+                return
+            }
+            if (!center.inBounds(boardOf(side.other()).size)) {
+                logOwn(side, LogKind.INFO, "目标坐标越界")
+                return
+            }
         }
 
         when (kind) {
             SkillKind.RECON -> {
                 val eb = boardOf(side.other())
                 val cells = crossCells(center, eb.size)
-                if (intercepted(eb, cells)) {
-                    logOwn(side, LogKind.AA, "本次侦察被拦截 @${coordLabel(center)}")
+                // 【侦察范围 ≠ 击落范围】只判「部署点」，被扫描的 5 格哪怕擦到防空区也不算击落。
+                if (intercepted(eb, listOf(center))) {
+                    logOwn(
+                        side, LogKind.AA,
+                        "【舰载侦察机】部署点 ${coordLabel(center)} 位于敌方防空区，战机被击落（只按部署点判定，扫描范围不影响）"
+                    )
                 } else {
                     val n = eb.ships.count { s ->
-                        !s.sunk && s.type != ShipType.SUBMARINE && s.cells.any { it in cells }
+                        !s.sunk && (when {
+                            s.type != ShipType.SUBMARINE -> s.cells.any { it in cells }
+                            s.surfaced -> s.cells.any { it in cells }
+                            // 水下潜艇：潜望镜（中心第 2 格）进入扫描区即视为发现，
+                            // 与是否上浮无关，也不因为首尾格被扫到就报错。
+                            else -> (if (s.cells.size > 1) s.cells[1] else s.cells[0]) in cells
+                        })
                     }
                     // 扫描成功才留痕：只记录「哪 5 格被扫过」，不记录船的位置，
                     // 棋盘据此画放大镜标记；撤销 / 重做随 state 快照自然回退。
@@ -846,18 +884,35 @@ class GameEngine(config: GameConfig = GameConfig()) {
                     // 侦察结果属于己方情报，绝不广播给对手；棋盘放大镜标记仍会留在敌方海域
                     logOwn(
                         side, LogKind.SKILL,
-                        "【舰载侦察机】@${coordLabel(center)}：十字 5 格扫描完成，水面舰信号 ${if (n == 0) "无" else "$n 个"}（仅报数量，不报坐标）"
+                        "【舰载侦察机】@${coordLabel(center)}：十字 5 格扫描完成，发现 ${if (n == 0) "0" else "$n"} 个舰艇信号（含水下潜望镜，仅报数量，不报坐标）"
                     )
                 }
             }
             SkillKind.SONAR -> {
-                val cells = crossCells(center, boardOf(side.other()).size)
-                val n = boardOf(side.other()).ships.count { s ->
+                val eb = boardOf(side.other())
+                val cells = Rules.hydrophoneCells(center, eb.size, eb.mountains)
+                val n = eb.ships.count { s ->
                     !s.sunk && s.type == ShipType.SUBMARINE && s.cells.any { it in cells }
                 }
+                setBoard(side.other(), eb.copy(sonarCells = eb.sonarCells + cells))
                 logOwn(
                     side, LogKind.SKILL,
-                    "【主动水听声呐】@${coordLabel(center)}：${if (n > 0) "发现潜艇信号（无视水下隐蔽）" else "未发现潜艇信号"}"
+                    "【主动水听声呐】@${coordLabel(center)}：扫描 ${cells.size} 格（3×3 + 四边外突 1 格，山地遮挡已扣除），发现潜艇信号 ${if (n == 0) "0" else "$n"} 个（仅报数量）"
+                )
+            }
+            SkillKind.RADAR_SURVEILLANCE -> {
+                val eb = boardOf(side.other())
+                val hull = ship.cells
+                val cells = Rules.radarCells(hull, eb.size, eb.mountains)
+                // 只探测水面舰艇与已上浮潜艇；水下潜艇的潜望镜不算水面目标。
+                val n = eb.ships.count { s ->
+                    !s.sunk && (s.type != ShipType.SUBMARINE || s.surfaced) &&
+                        s.cells.any { it in cells }
+                }
+                setBoard(side.other(), eb.copy(radarCells = eb.radarCells + cells))
+                logOwn(
+                    side, LogKind.SKILL,
+                    "【监视雷达】以本舰 ${hull.size} 格船体为中心扫描 ${cells.size} 格（射程 ${Rules.radarRange(eb.size)}，山地遮蔽已扣除），覆盖区内水面舰艇 ${if (n == 0) "0" else "$n"} 条（仅报数量，不报坐标 / 舰种）"
                 )
             }
             SkillKind.EVASIVE_MANEUVER -> {
@@ -916,9 +971,14 @@ class GameEngine(config: GameConfig = GameConfig()) {
                     logOwn(side, LogKind.INFO, "【鱼雷机空袭】需先点突防起点、再点同行或同列的一格指定航向")
                     return
                 }
-                val line = Rules.torpedoBomberLine(
-                    a.targets[0], a.targets[1], boardOf(side.other()).size
-                )
+                val eb0 = boardOf(side.other())
+                val p0 = a.targets[0]
+                val p1 = a.targets[1]
+                if (p0 in eb0.mountains || p1 in eb0.mountains || !p1.inBounds(eb0.size)) {
+                    logOwn(side, LogKind.INFO, "【鱼雷机空袭】起点 / 航向点不能是山地或越界，未消耗行动")
+                    return
+                }
+                val line = Rules.torpedoBomberLine(p0, p1, eb0.size)
                 if (line.size < 2) {
                     logOwn(side, LogKind.INFO, "【鱼雷机空袭】航向非法：第 2 个点必须与起点同行或同列")
                     return
@@ -927,7 +987,10 @@ class GameEngine(config: GameConfig = GameConfig()) {
                     state = state.copy(turnPhase = TurnPhase.ATTACK)
                     revision++
                 }
-                logOwn(side, LogKind.SKILL, "【鱼雷机空袭】已投雷，最多推进 ${line.size} 格，只在爆炸点结算")
+                logOwn(
+                    side, LogKind.SKILL,
+                    "【鱼雷机空袭】已投雷，从起点向前推进 ${line.size - 1} 格（航线共 ${line.size} 格），只在爆炸点结算"
+                )
                 applyTorpedoBomberLine(side, line)
             }
             SkillKind.INCENDIARY -> {
@@ -944,6 +1007,8 @@ class GameEngine(config: GameConfig = GameConfig()) {
                     revision++
                 }
                 updatePlayer(side) { it.copy(pendingStrike = PendingStrike(center, state.round)) }
+                val eb0 = boardOf(side.other())
+                setBoard(side.other(), eb0.copy(strikeCells = eb0.strikeCells + crossCells(center, eb0.size)))
                 logOwn(side, LogKind.SKILL, "已标记 ${coordLabel(center)}，将在己方下一回合开始时生效")
                 log(LogKind.SYSTEM, "${nameOf(side)} 已标记 ${coordLabel(center)}，该区域攻击将在其下一回合生效")
             }
@@ -993,6 +1058,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
         log(LogKind.SYSTEM, "战斗结束！胜利方：${nameOf(winner)}｜共 ${s.round} 回合｜点『返回房间』保持连接、解锁聊天、直接开下一局")
     }
 
+    /** 单点攻击候选：排除山地与已经真正打过的坐标。 */
     fun legalTargetsFor(side: Side): List<Coord> {
         val b = boardOf(side.other())
         val out = ArrayList<Coord>()
@@ -1000,6 +1066,19 @@ class GameEngine(config: GameConfig = GameConfig()) {
             for (c in 0 until b.size) {
                 val p = Coord(r, c)
                 if (p !in b.mountains && p !in b.attackedPoints) out.add(p)
+            }
+        }
+        return out
+    }
+
+    /** 情报 / 部署类候选：只排除山地，绝不因为「侦察过 / 被拦截过 / 打过」而屏蔽。 */
+    fun intelTargetsFor(side: Side): List<Coord> {
+        val b = boardOf(side.other())
+        val out = ArrayList<Coord>()
+        for (r in 0 until b.size) {
+            for (c in 0 until b.size) {
+                val p = Coord(r, c)
+                if (p !in b.mountains) out.add(p)
             }
         }
         return out
@@ -1054,7 +1133,15 @@ class GameEngine(config: GameConfig = GameConfig()) {
         // 大厅 / 棋盘只显示「我方编成」和「敌方剩余数量」。
         val hiddenFleet = FleetConfig()
         val enemyAliveCount = enemy.board.ships.count { !it.sunk }
-        val myBoardView = me.board.copy(shots = cleanShots(me.board.shots))
+        // 四种情报覆盖层是「扫描者视角」：只应出现在扫描者的敌方海域。
+        // 自己棋盘上那一层其实是对方扫描留下的，必须抹掉，否则等于告诉对手你在看哪里。
+        val myBoardView = me.board.copy(
+            shots = cleanShots(me.board.shots),
+            reconCells = emptySet(),
+            sonarCells = emptySet(),
+            radarCells = emptySet(),
+            strikeCells = emptySet()
+        )
         return GameView(
             viewer = side,
             phase = s.phase,
@@ -1075,6 +1162,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
             enemyAlive = emptyList(),
             enemyAliveCount = enemyAliveCount,
             legalTargets = if (s.phase == RoomPhase.IN_BATTLE && s.turn == side) legalTargetsFor(side) else emptyList(),
+            intelTargets = if (s.phase == RoomPhase.IN_BATTLE && s.turn == side) intelTargetsFor(side) else emptyList(),
             skills = skillAvailabilities(side),
             myActed = me.actedShipIds.toList(),
             log = s.log.filter { it.owner == null || it.owner == side },

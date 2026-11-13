@@ -21,6 +21,12 @@ fun Coord.chebyshev(o: Coord): Int = maxOf(abs(r - o.r), abs(c - o.c))
 
 val DIR4: List<Coord> = listOf(Coord(-1, 0), Coord(1, 0), Coord(0, -1), Coord(0, 1))
 
+/** 八方向（含四条对角线），雷达 / 水听射线复用。 */
+val DIR8: List<Coord> = listOf(
+    Coord(-1, 0), Coord(1, 0), Coord(0, -1), Coord(0, 1),
+    Coord(-1, -1), Coord(-1, 1), Coord(1, -1), Coord(1, 1)
+)
+
 fun crossCells(center: Coord, size: Int): List<Coord> {
     val out = ArrayList<Coord>(5)
     out.add(center)
@@ -55,7 +61,8 @@ enum class ShipType {
     AA_CRUISER,
     DESTROYER,
     ASW_SHIP,
-    GUNBOAT
+    GUNBOAT,
+    RADAR_PICKET
 }
 
 @Serializable
@@ -72,7 +79,8 @@ enum class SkillKind {
     SALVO,
     TORPEDO_BOMBER,
     INCENDIARY,
-    AIR_STRIKE_CALL
+    AIR_STRIKE_CALL,
+    RADAR_SURVEILLANCE
 }
 
 @Serializable
@@ -95,7 +103,7 @@ object FleetCatalog {
         ShipSpec(
             ShipType.CARRIER, "航空母舰", 5,
             "战术轰炸机：指定 1 格轰炸（等效 1 炮）",
-            "舰载侦察机（阶段一 / 第 2 回合起 / CD3 / 全局 5 次）：探测十字 5 格内水面船数量，扫描成功时该十字 5 格会在敌方棋盘留下「已侦察」放大镜标记；成为己方最后存活舰时解锁绝境副炮（无视 AA 的单格物理炮击）",
+            "舰载侦察机（阶段一 / 第 2 回合起 / CD3 / 全局 5 次）：以部署点为中心的十字 5 格计数舰船信号（水下潜艇只按潜望镜中心格计）；只有「部署点」落进敌方防空圈才会被击落，扫描范围大小与击落判定无关；扫描成功时该十字 5 格会在敌方棋盘留下「已侦察」放大镜标记；成为己方最后存活舰时解锁绝境副炮（无视 AA 的单格物理炮击）",
             "舰载侦察机 / 本体点防空：自身 5 格免疫敌方飞机侦察与轰炸并击落来犯敌机"
         ),
         ShipSpec(
@@ -107,7 +115,7 @@ object FleetCatalog {
         ShipSpec(
             ShipType.AVIATION_CRUISER, "航空巡洋舰", 4,
             "常规单格炮击",
-            "鱼雷机空袭（阶段二 / 第 2 回合起 / CD3 / 全局 2 次）：先点投雷起点，再点同行/同列一格定航向；鱼雷沿直线最多推进 3 格，只在「碰到敌舰 / 撞山前一格 / 射程尽头」单点爆炸，伤害判定与潜航鱼雷相同（可命中水下潜艇），沿途不留轨迹、不锁格；只要投雷起点不在敌方防空圈内即可实施 AA 圈外视距打击（起点落圈内战机才会被击落）",
+            "鱼雷机空袭（阶段二 / 第 2 回合起 / CD3 / 全局 2 次）：先点投雷起点，再点同行/同列一格定航向；鱼雷沿直线从起点向前推进 3 格（共 4 格航线），只在「碰到敌舰 / 撞山前一格 / 射程尽头」单点爆炸，伤害判定与潜航鱼雷相同（可命中水下潜艇），沿途不留轨迹、不锁格；只要投雷起点不在敌方防空圈内即可实施 AA 圈外视距打击（起点落圈内战机才会被击落）",
             "无"
         ),
         ShipSpec(
@@ -125,8 +133,14 @@ object FleetCatalog {
         ShipSpec(
             ShipType.AA_CRUISER, "防空巡洋舰", 3,
             "常规单格炮击",
-            "区域防空网：以船体向外扩展 1 圈，自动击落目标点落在该区域的敌方飞机",
-            "【防空拦截】战机被击落（战报中性化，不公开舰种与攻击方式）"
+            "区域防空网：以船体每格向外扩展 1 圈（3 格船共 15 格）形成防空区，自动击落「部署点」落在该区域的敌方飞机；飞机只是飞过该区去炸别处不算被击落",
+            "【防空拦截】战机被击落（战报中性化，不公开舰种与攻击方式）；被拦截坐标不封锁，仍可被其他舰船攻击"
+        ),
+        ShipSpec(
+            ShipType.RADAR_PICKET, "雷达哨舰", 3,
+            "常规单格炮击",
+            "监视雷达（阶段一 / 第 2 回合起 / CD3 / 无需选点）：以本舰 3 格船体为源点向八方向发射雷达波，射线逐格前进、遇山即止；10×10 / 12×12 射程 2 格，14×14 射程 3 格。只返回覆盖区内「水面舰艇 + 已上浮潜艇」的数量，敌舰只要有一格进入雷达区就计入，不报坐标、不报舰种；山地会遮蔽其后方海域",
+            "无（纯情报舰，不提供防空、不免疫、不增加攻击名额）"
         ),
         ShipSpec(
             ShipType.DESTROYER, "驱逐舰", 2,
@@ -137,7 +151,7 @@ object FleetCatalog {
         ShipSpec(
             ShipType.ASW_SHIP, "反潜舰", 2,
             "深水炸弹炮：对水面船正常 1 格伤害；命中水下潜艇任意一格直接报 HIT 并损毁该格（打满 3 格或命中中心格即击沉）",
-            "主动水听声呐（阶段一 / 第 2 回合起 / CD3）：探测十字 5 格内是否存在潜艇，无视水下隐蔽",
+            "主动水听声呐（阶段一 / 第 2 回合起 / CD3）：以投放点为中心扫描 3×3 + 四边中间各外突 1 格（共 13 格），只探测潜艇且无视水下隐蔽，山地会阻挡声波、山后格子不计入；只返回发现数量",
             "无"
         ),
         ShipSpec(
@@ -159,7 +173,7 @@ object FleetCatalog {
     fun optionsFor(size: Int): List<ShipType> = when (size) {
         5 -> listOf(ShipType.CARRIER, ShipType.BATTLESHIP)
         4 -> listOf(ShipType.AVIATION_CRUISER, ShipType.FIRE_CRUISER)
-        3 -> listOf(ShipType.SUBMARINE, ShipType.AA_CRUISER)
+        3 -> listOf(ShipType.SUBMARINE, ShipType.AA_CRUISER, ShipType.RADAR_PICKET)
         2 -> listOf(ShipType.DESTROYER, ShipType.ASW_SHIP)
         else -> listOf(ShipType.GUNBOAT)
     }
@@ -249,9 +263,16 @@ data class Board(
     val ships: List<Ship> = emptyList(),
     val shots: List<ShotRecord> = emptyList(),
     val attackedPoints: Set<Coord> = emptySet(),
-    // 舰载侦察机成功扫描过的格子（十字 5 格）；只用于棋盘示意，不泄露舰船坐标。
+    // 四种情报覆盖层：只用于棋盘示意，全部不写入 attackedPoints、不影响任何攻击判定。
     // 带默认值，联机 JSON 新旧版本互相兼容（Wire.json 已开 ignoreUnknownKeys）。
-    val reconCells: Set<Coord> = emptySet()
+    // 侦察机扫过的十字 5 格（琥珀放大镜）
+    val reconCells: Set<Coord> = emptySet(),
+    // 水听声呐扫过的 13 格（蓝色同心波纹）
+    val sonarCells: Set<Coord> = emptySet(),
+    // 监视雷达覆盖区（青绿虚线框 + 角点）
+    val radarCells: Set<Coord> = emptySet(),
+    // 已标记、下回合生效的陆航空袭十字 5 格（橙红斜叉）
+    val strikeCells: Set<Coord> = emptySet()
 )
 
 @Serializable
@@ -437,6 +458,8 @@ data class GameView(
     val enemyAlive: List<ShipType>,
     val enemyAliveCount: Int = 0,
     val legalTargets: List<Coord>,
+    /** 情报 / 部署类技能候选格：只排除山地，不排除「已攻击过」的坐标。 */
+    val intelTargets: List<Coord> = emptyList(),
     val skills: List<SkillAvailability>,
     val myActed: List<String> = emptyList(),
     val log: List<LogEntry>,

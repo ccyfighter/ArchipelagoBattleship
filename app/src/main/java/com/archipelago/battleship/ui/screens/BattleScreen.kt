@@ -85,16 +85,20 @@ fun BattleScreen(vm: GameViewModel, state: UiState, onResign: () -> Unit = {}) {
     val candidates: List<Coord> = if (!myTurn) emptyList()
     else if (pendingSkill != null) {
         val sk = pendingSkill!!
-        if (sk.kind == SkillKind.TORPEDO_BOMBER && skillTargets.size == 1) {
-            // 第 2 个点只用于定航向：只提示射程内（2 格）的同行 / 同列格，不画整行整列的长轨迹
+        if (need == 0) emptyList() // 雷达以船体为中心自动扫描，不需要选点
+        else if (sk.kind == SkillKind.TORPEDO_BOMBER && skillTargets.size == 1) {
+            // 第 2 个点只用于定航向：只提示射程内的同行 / 同列格，不画整行整列的长轨迹
             val s0 = skillTargets[0]
             val n = view.enemyBoard.size
-            (1..2).flatMap { step ->
+            (1..Rules.TORPEDO_BOMBER_STEPS).flatMap { step ->
                 listOf(
                     Coord(s0.r, s0.c + step), Coord(s0.r, s0.c - step),
                     Coord(s0.r + step, s0.c), Coord(s0.r - step, s0.c)
                 )
             }.filter { it.inBounds(n) && it !in view.enemyBoard.mountains }.distinct()
+        } else if (sk.kind == SkillKind.TORPEDO_BOMBER || Rules.isTactical(sk.kind)) {
+            // 部署点 / 情报技能只排除山地：已打过、已侦察、被拦截的格子照样可以选
+            view.intelTargets
         } else view.legalTargets
     }
     else if (tacticPhase) emptyList()
@@ -120,6 +124,7 @@ fun BattleScreen(vm: GameViewModel, state: UiState, onResign: () -> Unit = {}) {
         if (!myTurn) return
         val skill = pendingSkill
         if (skill != null) {
+            if (need == 0) return
             skillTargets = if (skillTargets.size < need) skillTargets + c
             else skillTargets.dropLast(1) + c
             return
@@ -211,9 +216,11 @@ fun BattleScreen(vm: GameViewModel, state: UiState, onResign: () -> Unit = {}) {
         }
 
         val hint = when {
+            pendingSkill?.kind == SkillKind.RADAR_SURVEILLANCE ->
+                "监视雷达：无需选点，按「确认释放技能」即以本舰 3 格船体为中心扫描（射程 ${Rules.radarRange(view.enemyBoard.size)} 格，山地遮蔽后方海域）；只返回覆盖区内水面舰艇数量，不报坐标 / 舰种"
             pendingSkill?.kind == SkillKind.TORPEDO_BOMBER ->
                 if (skillTargets.isEmpty())
-                    "鱼雷机：第 1 点点投雷起点（须在敌方防空圈外），第 2 点点同行/同列一格只定航向；鱼雷最多推进 3 格，在「碰到敌舰 / 撞山前一格 / 射程尽头」单点爆炸，沿途不留轨迹、中间格仍可再打"
+                    "鱼雷机：第 1 点点投雷起点（须在敌方防空圈外），第 2 点点同行/同列一格只定航向；鱼雷从起点向前推进 ${Rules.TORPEDO_BOMBER_STEPS} 格（航线共 ${Rules.TORPEDO_BOMBER_STEPS + 1} 格），在「碰到敌舰 / 撞山前一格 / 射程尽头」单点爆炸，沿途不留轨迹、中间格仍可再打"
                 else
                     "鱼雷机：已选起点 ${coordLabel(skillTargets[0])}，再点同行/同列一格定航向（已选 ${skillTargets.size}/$need）；起点在 AA 圈外即可打击防空舰，只显示选点、不画航线"
             pendingSkill != null ->
@@ -242,7 +249,7 @@ fun BattleScreen(vm: GameViewModel, state: UiState, onResign: () -> Unit = {}) {
         )
         Spacer(Modifier.height(8.dp))
         BoardLegend(state.theme)
-        InfoLine("深色标尺带为坐标：横向 A… / 纵向 1…；选中目标时行列标签同步高亮；侦察机扫过的格子会留下放大镜标记。")
+        InfoLine("深色标尺带为坐标：横向 A… / 纵向 1…；选中目标时行列标签同步高亮。四种情报层各有独立画法：侦察机=琥珀放大镜、水听=蓝色同心波纹、雷达=青色虚线框、陆航空袭预告=橙红斜叉；它们只是显示标记，不封锁坐标、不影响任何攻击。")
 
         Spacer(Modifier.height(8.dp))
         // ---- 操作确认区：所有动作都显式确认，不自动推进 ----
@@ -343,7 +350,7 @@ fun BattleScreen(vm: GameViewModel, state: UiState, onResign: () -> Unit = {}) {
                 }
             }
         }
-        InfoLine("主炮齐射需点 2 个坐标；鱼雷机需点「起点 + 同行/同列航向点」共 2 点，起点在防空圈外即可打击 AA 舰。两种鱼雷都只在一个点爆炸、只结算一次（可命中水下潜艇），沿途不留轨迹、不锁格，中间格后续仍可用火炮打击；单点攻击自动排除已打过的格子。")
+        InfoLine("主炮齐射需点 2 个坐标；鱼雷机需点「起点 + 同行/同列航向点」共 2 点，起点在防空圈外即可从圈外打击 AA 舰（航线穿过防空区不算被击落）；从第 1 点向前推进 3 格。两种鱼雷都只在一个点爆炸、只结算一次（可命中水下潜艇），撞山则在山前一格引爆，沿途不留轨迹、不锁格，中间格后续仍可用火炮打击；侦察 / 拦截 / 免疫都不写坐标去重。")
         InfoLine("战报情报：双方播报只显示「哪一方 + 攻击坐标 + 结果」，不报鱼雷 / 舰载机 / 陆航等攻击方式，也不报开火舰种或被击中舰种；只有击沉才公开舰种。侦察 / 声呐结果与操作提示仅自己可见，敌方编成与存活舰种不下发。")
 
         Spacer(Modifier.height(8.dp))

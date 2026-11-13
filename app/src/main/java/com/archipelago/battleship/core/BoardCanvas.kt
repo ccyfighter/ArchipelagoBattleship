@@ -287,7 +287,46 @@ fun BoardCanvas(
             )
         }
 
-        // ---------- 6.5 侦察机扫描区：淡琥珀底 + 放大镜角标 ----------
+        // ---------- 6.5 情报覆盖层：四种互不相同的底纹 + 角标 ----------
+        // 纯显示层：不写 attackedPoints、不参与候选格计算，拦截 / 侦察 / 扫描都不影响攻击。
+        // 陆航空袭预告：橙红底 + 细斜叉
+        for (c in board.strikeCells) {
+            if (!c.inBounds(n)) continue
+            val tl = topLeft(c)
+            drawRect(pal.strikeFill, topLeft = tl, size = Size(cell, cell))
+            val m = cell * 0.24f
+            val w = max(1.2f, cell * 0.045f)
+            drawLine(pal.strikeInk.copy(alpha = 0.85f), Offset(tl.x + m, tl.y + m), Offset(tl.x + cell - m, tl.y + cell - m), strokeWidth = w)
+            drawLine(pal.strikeInk.copy(alpha = 0.85f), Offset(tl.x + cell - m, tl.y + m), Offset(tl.x + m, tl.y + cell - m), strokeWidth = w)
+        }
+        // 监视雷达：青底 + 四边短划虚线框 + 中心回波点
+        for (c in board.radarCells) {
+            if (!c.inBounds(n)) continue
+            val tl = topLeft(c)
+            drawRect(pal.radarFill, topLeft = tl, size = Size(cell, cell))
+            val m = cell * 0.14f
+            val seg = cell * 0.18f
+            val w = max(1f, cell * 0.035f)
+            for (k in 0..1) {
+                val a = m + k * (cell - 2f * m - seg)
+                drawLine(pal.radarInk.copy(alpha = 0.75f), Offset(tl.x + a, tl.y + m), Offset(tl.x + a + seg, tl.y + m), strokeWidth = w)
+                drawLine(pal.radarInk.copy(alpha = 0.75f), Offset(tl.x + a, tl.y + cell - m), Offset(tl.x + a + seg, tl.y + cell - m), strokeWidth = w)
+                drawLine(pal.radarInk.copy(alpha = 0.75f), Offset(tl.x + m, tl.y + a), Offset(tl.x + m, tl.y + a + seg), strokeWidth = w)
+                drawLine(pal.radarInk.copy(alpha = 0.75f), Offset(tl.x + cell - m, tl.y + a), Offset(tl.x + cell - m, tl.y + a + seg), strokeWidth = w)
+            }
+            drawCircle(pal.radarInk, radius = max(1.3f, cell * 0.075f), center = center(c))
+        }
+        // 主动水听声呐：蓝底 + 两圈同心波纹
+        for (c in board.sonarCells) {
+            if (!c.inBounds(n)) continue
+            val tl = topLeft(c)
+            drawRect(pal.sonarFill, topLeft = tl, size = Size(cell, cell))
+            val ctr = center(c)
+            val sw = max(1f, cell * 0.04f)
+            drawCircle(pal.sonarInk.copy(alpha = 0.85f), radius = cell * 0.17f, center = ctr, style = Stroke(sw))
+            drawCircle(pal.sonarInk.copy(alpha = 0.55f), radius = cell * 0.31f, center = ctr, style = Stroke(sw))
+        }
+        // 舰载侦察机：琥珀底 + 方框 + 放大镜角标
         for (c in board.reconCells) {
             if (!c.inBounds(n)) continue
             val tl = topLeft(c)
@@ -456,7 +495,8 @@ fun BoardCanvas(
                     nc.drawText("S", tl.x + cell * 0.80f, tl.y + cell * 0.36f, labelPaint)
                 }
                 ShotResult.INTERCEPTED, ShotResult.IMMUNE, ShotResult.BLOCKED -> {
-                    drawRect(pal.blockedFill, topLeft = tl, size = Size(cell, cell))
+                    // 底色压得很淡：这些格子并未被锁死，底下的「可攻击」四角括号仍要看得见
+                    drawRect(pal.blockedFill.copy(alpha = 0.16f), topLeft = tl, size = Size(cell, cell))
                     for (k in 0..2) {
                         val o = cell * (0.18f + k * 0.28f)
                         drawLine(

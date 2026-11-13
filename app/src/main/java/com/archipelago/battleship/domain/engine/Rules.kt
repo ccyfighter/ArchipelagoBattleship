@@ -2,6 +2,8 @@ package com.archipelago.battleship.domain.engine
 
 import com.archipelago.battleship.domain.model.Board
 import com.archipelago.battleship.domain.model.Coord
+import com.archipelago.battleship.domain.model.DIR4
+import com.archipelago.battleship.domain.model.DIR8
 import com.archipelago.battleship.domain.model.FleetCatalog
 import com.archipelago.battleship.domain.model.FleetConfig
 import com.archipelago.battleship.domain.model.GameConfig
@@ -15,7 +17,7 @@ import kotlin.math.abs
 import kotlin.random.Random
 
 /**
- * 纯 Kotlin 规则层：地形生成、布阵合法性、技能参数表。
+ * 纯 Kotlin 规则层：地形生成、布阵合法性、技能参数表、传感器覆盖区。
  * 不依赖 Android / Compose / 网络，可单测。
  */
 object Rules {
@@ -27,6 +29,13 @@ object Rules {
 
     /** 山地总面积占全图的最大比例。 */
     const val MOUNTAIN_MAX_RATIO = 0.20f
+
+    /**
+     * 鱼雷机从「投雷起点」向前推进的格数。
+     * 航线 = 起点 + 3 步 = 共 4 格，例如 M14 向西可打到 J14（L/K/J 各 1 步）。
+     * v8 之前写成 0..2（只有 3 格、最远 K14），导致射程比标注少 1 格。
+     */
+    const val TORPEDO_BOMBER_STEPS = 3
 
     fun attacksPerTurn(aliveShips: Int): Int = minOf(aliveShips, BASE_ATTACKS_PER_TURN)
 
@@ -133,7 +142,10 @@ object Rules {
             ships = ships,
             shots = emptyList(),
             attackedPoints = emptySet(),
-            reconCells = emptySet()
+            reconCells = emptySet(),
+            sonarCells = emptySet(),
+            radarCells = emptySet(),
+            strikeCells = emptySet()
         )
     }
 
@@ -202,6 +214,10 @@ object Rules {
 
     /* ------------------------- 防空区 ------------------------- */
 
+    /**
+     * 防空圈只用于判定「敌方飞机的部署点」是否会被击落。
+     * 绝不因为侦查范围 / 鱼雷航线扫过防空区就把飞机打下来。
+     */
     fun aaZone(ship: Ship, size: Int): Set<Coord> {
         val out = HashSet<Coord>()
         when (ship.type) {
@@ -218,6 +234,62 @@ object Rules {
         return out.filter { it.inBounds(size) }.toSet()
     }
 
+    /* ------------------------- 传感器覆盖区 ------------------------- */
+
+    /**
+     * 主动水听声呐：中心 3×3（9 格）+ 四边中间各向外突出 1 格 = 共 13 格。
+     * 山地阻挡声波：山地本身不计入，且该方向被山挡住后，山后那一格也不计入。
+     * 只用于「是否存在潜艇」的计数，不写 attackedPoints、不锁定任何格子。
+     */
+    fun hydrophoneCells(center: Coord, size: Int, mountains: Set<Coord>): Set<Coord> {
+        val out = LinkedHashSet<Coord>()
+        if (!center.inBounds(size) || center in mountains) return out
+        out.add(center)
+        for (d in DIR8) {
+            val p = Coord(center.r + d.r, center.c + d.c)
+            if (p.inBounds(size) && p !in mountains) out.add(p)
+        }
+        for (d in DIR4) {
+            val p1 = Coord(center.r + d.r, center.c + d.c)
+            if (p1 !in out) continue // 前一格就是山，射线到此中断
+            val p2 = Coord(center.r + d.r * 2, center.c + d.c * 2)
+            if (p2.inBounds(size) && p2 !in mountains) out.add(p2)
+        }
+        return out
+    }
+
+    /**
+     * 监视雷达射程按地图尺寸自适应，避免小图超模 / 大图无用：
+     * 10×10 与 12×12 为 2 格射线，14×14 为 3 格射线。
+     * 覆盖率大致 30% / 21% / 25%，且只返回「数量」这一极粗情报，面积越大信息量反而越低。
+     */
+    fun radarRange(size: Int): Int = when {
+        size >= 14 -> 3
+        else -> 2
+    }
+
+    /**
+     * 以船体每格为源点，向八方向发射雷达波，逐格前进；
+     * 遇山地 / 越界立即停止该射线，山后海域被遮蔽。所有射线的并集即雷达覆盖区。
+     * 敌舰只要有一格落在覆盖区里就计入数量。
+     */
+    fun radarCells(hull: List<Coord>, size: Int, mountains: Set<Coord>): Set<Coord> {
+        val out = LinkedHashSet<Coord>()
+        val steps = radarRange(size)
+        for (h in hull) {
+            if (!h.inBounds(size) || h in mountains) continue
+            out.add(h)
+            for (d in DIR8) {
+                for (k in 1..steps) {
+                    val p = Coord(h.r + d.r * k, h.c + d.c * k)
+                    if (!p.inBounds(size) || p in mountains) break
+                    out.add(p)
+                }
+            }
+        }
+        return out
+    }
+
     /* ------------------------- 技能参数表 ------------------------- */
 
     fun skillFor(type: ShipType): SkillKind? = when (type) {
@@ -228,18 +300,21 @@ object Rules {
         ShipType.DESTROYER -> SkillKind.EVASIVE_MANEUVER
         ShipType.ASW_SHIP -> SkillKind.SONAR
         ShipType.GUNBOAT -> SkillKind.AIR_STRIKE_CALL
+        ShipType.RADAR_PICKET -> SkillKind.RADAR_SURVEILLANCE
         ShipType.SUBMARINE -> null
         ShipType.AA_CRUISER -> null
     }
 
     fun isTactical(kind: SkillKind): Boolean = when (kind) {
-        SkillKind.RECON, SkillKind.SONAR, SkillKind.EVASIVE_MANEUVER -> true
+        SkillKind.RECON, SkillKind.SONAR, SkillKind.RADAR_SURVEILLANCE,
+        SkillKind.EVASIVE_MANEUVER -> true
         else -> false
     }
 
     fun skillLabel(kind: SkillKind): String = when (kind) {
         SkillKind.RECON -> "舰载侦察机"
         SkillKind.SONAR -> "主动水听声呐"
+        SkillKind.RADAR_SURVEILLANCE -> "监视雷达"
         SkillKind.EVASIVE_MANEUVER -> "紧急规避机动"
         SkillKind.SALVO -> "主炮齐射"
         SkillKind.TORPEDO_BOMBER -> "鱼雷机空袭"
@@ -248,7 +323,8 @@ object Rules {
     }
 
     fun skillCooldown(kind: SkillKind): Int = when (kind) {
-        SkillKind.RECON, SkillKind.SONAR, SkillKind.SALVO, SkillKind.TORPEDO_BOMBER -> 3
+        SkillKind.RECON, SkillKind.SONAR, SkillKind.RADAR_SURVEILLANCE,
+        SkillKind.SALVO, SkillKind.TORPEDO_BOMBER -> 3
         else -> 0
     }
 
@@ -262,15 +338,17 @@ object Rules {
     }
 
     fun skillMinRound(kind: SkillKind): Int = when (kind) {
-        SkillKind.RECON, SkillKind.SONAR, SkillKind.SALVO, SkillKind.TORPEDO_BOMBER -> 2
+        SkillKind.RECON, SkillKind.SONAR, SkillKind.RADAR_SURVEILLANCE,
+        SkillKind.SALVO, SkillKind.TORPEDO_BOMBER -> 2
         SkillKind.INCENDIARY -> 3
         SkillKind.AIR_STRIKE_CALL -> 4
         else -> 1
     }
 
-    /** 鱼雷机需要 2 个点：第 1 个是突防起点，第 2 个与起点同行 / 同列，只用于确定航向。 */
+    /** 返回技能需要玩家点选的坐标数：0 = 以船体为中心自动扫描，无需选点。 */
     fun skillTargetCount(kind: SkillKind): Int = when (kind) {
         SkillKind.SALVO, SkillKind.TORPEDO_BOMBER -> 2
+        SkillKind.RADAR_SURVEILLANCE -> 0
         else -> 1
     }
 
@@ -283,11 +361,11 @@ object Rules {
             (when { dc > 0 -> 1; dc < 0 -> -1; else -> 0 })
     }
 
-    /** 起点 + 沿航向 2 格，最多 3 格直线；越界即截断。 */
+    /** 起点 + 沿航向 TORPEDO_BOMBER_STEPS 格；越界即截断。 */
     fun torpedoBomberLine(start: Coord, dir: Coord, size: Int): List<Coord> {
         val (sr, sc) = torpedoBomberDir(start, dir) ?: return listOf(start)
-        val out = ArrayList<Coord>(3)
-        for (i in 0..2) {
+        val out = ArrayList<Coord>(TORPEDO_BOMBER_STEPS + 1)
+        for (i in 0..TORPEDO_BOMBER_STEPS) {
             val c = Coord(start.r + sr * i, start.c + sc * i)
             if (!c.inBounds(size)) break
             out.add(c)

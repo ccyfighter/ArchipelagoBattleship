@@ -59,6 +59,12 @@ data class BoardPalette(
     val spentInk: Color,
     val reconFill: Color,
     val reconInk: Color,
+    val sonarFill: Color,
+    val sonarInk: Color,
+    val radarFill: Color,
+    val radarInk: Color,
+    val strikeFill: Color,
+    val strikeInk: Color,
     val accent: Color,
     val select: Color
 )
@@ -98,6 +104,12 @@ fun palette(mode: AppThemeMode): BoardPalette = when (mode) {
         spentInk = Color(0x554A5E70),
         reconFill = Color(0x2FB8791B),
         reconInk = Color(0xFFA9690F),
+        sonarFill = Color(0x2A2F6FB0),
+        sonarInk = Color(0xFF2F6FB0),
+        radarFill = Color(0x2A12806C),
+        radarInk = Color(0xFF127C74),
+        strikeFill = Color(0x33C0492C),
+        strikeInk = Color(0xFFC0492C),
         accent = Color(0xFF1F4E79),
         select = Color(0xFFE07B1B)
     )
@@ -135,6 +147,12 @@ fun palette(mode: AppThemeMode): BoardPalette = when (mode) {
         spentInk = Color(0x55D6C79E),
         reconFill = Color(0x2FE0A83A),
         reconInk = Color(0xFFE0C060),
+        sonarFill = Color(0x337FB3E0),
+        sonarInk = Color(0xFF7FB3E0),
+        radarFill = Color(0x2F79D3B0),
+        radarInk = Color(0xFF79D3B0),
+        strikeFill = Color(0x33FF9A5A),
+        strikeInk = Color(0xFFFF9A5A),
         accent = Color(0xFFD8B45A),
         select = Color(0xFFFF8A3C)
     )
@@ -172,6 +190,12 @@ fun palette(mode: AppThemeMode): BoardPalette = when (mode) {
         spentInk = Color(0x554FC3F7),
         reconFill = Color(0x2FFFD166),
         reconInk = Color(0xFFFFD166),
+        sonarFill = Color(0x334FC3F7),
+        sonarInk = Color(0xFF4FC3F7),
+        radarFill = Color(0x2F9BE1FF),
+        radarInk = Color(0xFF9BE1FF),
+        strikeFill = Color(0x33FF8A5C),
+        strikeInk = Color(0xFFFF8A5C),
         accent = Color(0xFF35E0C0),
         select = Color(0xFFFFC107)
     )

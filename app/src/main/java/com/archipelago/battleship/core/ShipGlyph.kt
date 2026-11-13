@@ -15,6 +15,7 @@ import kotlin.math.max
  *  巡洋舰      = 矩形船体 + 三角舰首 + 一条斜杠 /
  *  战列舰      = 矩形船体 + 三角舰首 + 两条平行斜杠 //
  *  航空母舰    = 矩形船体 + 三角舰首 + 一条水平横杠 - + 交界处垂直竖杠 |
+ *  雷达哨舰    = 矩形船体 + 三角舰首 + 桅杆 + 三角雷达天线 + 左右回波短线
  */
 fun DrawScope.drawShipGlyph(
     type: ShipType,
@@ -92,6 +93,18 @@ private fun DrawScope.drawGlyph(
                 }
                 ShipType.AVIATION_CRUISER, ShipType.FIRE_CRUISER, ShipType.AA_CRUISER -> {
                     slash(w * 0.28f, w * 0.52f, h, ink, stroke, alpha)
+                }
+                ShipType.RADAR_PICKET -> {
+                    drawLine(ink, Offset(w * 0.42f, h * 0.84f), Offset(w * 0.42f, h * 0.42f), strokeWidth = stroke, alpha = alpha)
+                    val dish = Path().apply {
+                        moveTo(w * 0.27f, h * 0.44f)
+                        lineTo(w * 0.42f, h * 0.14f)
+                        lineTo(w * 0.57f, h * 0.44f)
+                        close()
+                    }
+                    drawPath(dish, ink, alpha = alpha)
+                    drawLine(ink, Offset(w * 0.14f, h * 0.30f), Offset(w * 0.23f, h * 0.30f), strokeWidth = stroke * 0.7f, alpha = alpha)
+                    drawLine(ink, Offset(w * 0.61f, h * 0.30f), Offset(w * 0.70f, h * 0.30f), strokeWidth = stroke * 0.7f, alpha = alpha)
                 }
                 ShipType.CARRIER -> {
                     drawLine(ink, Offset(w * 0.12f, h / 2f), Offset(w * 0.66f, h / 2f), strokeWidth = stroke, alpha = alpha)

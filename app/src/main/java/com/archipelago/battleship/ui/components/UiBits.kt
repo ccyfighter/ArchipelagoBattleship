@@ -300,7 +300,9 @@ fun ChipButton(
 
 /* ============================ 棋盘图例 ============================ */
 
-private enum class LegendKind { LEGAL, SPENT, RECON, MISS, HIT, SUNK, BLOCKED, LAST, TERRAIN }
+private enum class LegendKind {
+    LEGAL, SPENT, RECON, SONAR, RADAR, STRIKE, MISS, HIT, SUNK, BLOCKED, LAST, TERRAIN
+}
 
 private fun DrawScope.legendMark(kind: LegendKind, pal: BoardPalette) {
     val s = size.minDimension
@@ -345,6 +347,30 @@ private fun DrawScope.legendMark(kind: LegendKind, pal: BoardPalette) {
                 strokeWidth = 2f
             )
         }
+        LegendKind.SONAR -> {
+            drawRect(pal.sonarFill, topLeft = Offset.Zero, size = Size(s, s))
+            drawCircle(pal.sonarInk.copy(alpha = 0.85f), radius = s * 0.17f, center = c, style = Stroke(2f))
+            drawCircle(pal.sonarInk.copy(alpha = 0.55f), radius = s * 0.31f, center = c, style = Stroke(1.5f))
+        }
+        LegendKind.RADAR -> {
+            drawRect(pal.radarFill, topLeft = Offset.Zero, size = Size(s, s))
+            val m = s * 0.14f
+            val seg = s * 0.18f
+            for (k in 0..1) {
+                val a = m + k * (s - 2f * m - seg)
+                drawLine(pal.radarInk.copy(alpha = 0.75f), Offset(a, m), Offset(a + seg, m), strokeWidth = 1.5f)
+                drawLine(pal.radarInk.copy(alpha = 0.75f), Offset(a, s - m), Offset(a + seg, s - m), strokeWidth = 1.5f)
+                drawLine(pal.radarInk.copy(alpha = 0.75f), Offset(m, a), Offset(m, a + seg), strokeWidth = 1.5f)
+                drawLine(pal.radarInk.copy(alpha = 0.75f), Offset(s - m, a), Offset(s - m, a + seg), strokeWidth = 1.5f)
+            }
+            drawCircle(pal.radarInk, radius = s * 0.075f, center = c)
+        }
+        LegendKind.STRIKE -> {
+            drawRect(pal.strikeFill, topLeft = Offset.Zero, size = Size(s, s))
+            val m = s * 0.24f
+            drawLine(pal.strikeInk.copy(alpha = 0.85f), Offset(m, m), Offset(s - m, s - m), strokeWidth = 1.8f)
+            drawLine(pal.strikeInk.copy(alpha = 0.85f), Offset(s - m, m), Offset(m, s - m), strokeWidth = 1.8f)
+        }
         LegendKind.MISS -> {
             drawRect(pal.missFill, topLeft = Offset.Zero, size = Size(s, s))
             drawCircle(pal.miss, radius = q, center = c, style = Stroke(2f))
@@ -367,7 +393,7 @@ private fun DrawScope.legendMark(kind: LegendKind, pal: BoardPalette) {
             drawLine(pal.sunkInk, Offset(c.x + d, c.y - d), Offset(c.x - d, c.y + d), strokeWidth = 2.4f)
         }
         LegendKind.BLOCKED -> {
-            drawRect(pal.blockedFill, topLeft = Offset.Zero, size = Size(s, s))
+            drawRect(pal.blockedFill.copy(alpha = 0.16f), topLeft = Offset.Zero, size = Size(s, s))
             val shield = Path().apply {
                 moveTo(c.x, c.y - q)
                 lineTo(c.x + q * 0.82f, c.y)
@@ -407,7 +433,10 @@ fun BoardLegend(mode: AppThemeMode, modifier: Modifier = Modifier) {
     val items = listOf(
         LegendKind.LEGAL to "可攻击",
         LegendKind.SPENT to "已打过",
-        LegendKind.RECON to "已侦察",
+        LegendKind.RECON to "侦察区",
+        LegendKind.SONAR to "水听区",
+        LegendKind.RADAR to "雷达区",
+        LegendKind.STRIKE to "空袭预告",
         LegendKind.MISS to "未命中",
         LegendKind.HIT to "命中",
         LegendKind.SUNK to "击沉",
