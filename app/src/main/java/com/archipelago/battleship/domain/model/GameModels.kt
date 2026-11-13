@@ -126,13 +126,13 @@ object FleetCatalog {
             ShipType.AA_CRUISER, "防空巡洋舰", 3,
             "常规单格炮击",
             "区域防空网：以船体向外扩展 1 圈，自动击落目标点落在该区域的敌方飞机",
-            "【防空拦截】战机被击落（向双方播报）"
+            "【防空拦截】战机被击落（战报中性化，不公开舰种与攻击方式）"
         ),
         ShipSpec(
             ShipType.DESTROYER, "驱逐舰", 2,
             "常规单格炮击",
             "紧急规避机动（阶段一 / 全局 1 次）：平移 / 转向至 4 格航程内未被攻击过的合法水域，保留已受损伤",
-            "机动后向敌方全局播报『敌方驱逐舰已实施紧急规避机动』"
+            "机动后仅作中性播报，不公开舰种"
         ),
         ShipSpec(
             ShipType.ASW_SHIP, "反潜舰", 2,
@@ -266,8 +266,20 @@ data class ChatMessage(
     val emoji: Boolean = false
 )
 
+/**
+ * 战报条目。
+ * owner == null 表示双方可见的公开战报（只含坐标 + 结果，不含攻击方式与舰种）；
+ * owner == 某一方表示仅该方可见的操作反馈（校验失败、侦察结果、技能详情等）。
+ * viewFor() 按收件方过滤，因此联机下发的报文里也不会夹带对方的情报。
+ */
 @Serializable
-data class LogEntry(val id: Long, val round: Int, val kind: LogKind, val text: String)
+data class LogEntry(
+    val id: Long,
+    val round: Int,
+    val kind: LogKind,
+    val text: String,
+    val owner: Side? = null
+)
 
 @Serializable
 data class SideStats(
@@ -278,11 +290,16 @@ data class SideStats(
 )
 
 @Serializable
+enum class BattleEndReason { ANNIHILATION, RESIGN }
+
+@Serializable
 data class BattleResult(
     val winner: Side,
     val rounds: Int,
     val host: SideStats,
-    val guest: SideStats
+    val guest: SideStats,
+    val reason: BattleEndReason = BattleEndReason.ANNIHILATION,
+    val resigned: Side? = null
 )
 
 @Serializable
@@ -349,6 +366,10 @@ sealed class GameAction {
     object ReturnToLobby : GameAction()
 
     @Serializable
+    @SerialName("resign")
+    object Resign : GameAction()
+
+    @Serializable
     @SerialName("fire")
     data class Fire(val shipId: String, val target: Coord) : GameAction()
 
@@ -412,7 +433,9 @@ data class GameView(
     val enemyBoard: Board,
     val enemySunkTypes: List<ShipType>,
     val myAlive: List<ShipType>,
+    /** 敌方存活舰种属于情报，一律不下发；UI 只显示 enemyAliveCount 这个数量。 */
     val enemyAlive: List<ShipType>,
+    val enemyAliveCount: Int = 0,
     val legalTargets: List<Coord>,
     val skills: List<SkillAvailability>,
     val myActed: List<String> = emptyList(),

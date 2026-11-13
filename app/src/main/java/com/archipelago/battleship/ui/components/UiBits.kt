@@ -470,8 +470,9 @@ fun ResultBanner(entries: List<LogEntry>, modifier: Modifier = Modifier) {
             val (tag, color) = when (e.kind) {
                 LogKind.HIT -> "命中" to MaterialTheme.colorScheme.error
                 LogKind.MISS -> "未命中" to Color(0xFF2F7FC1)
-                LogKind.AA -> "防空拦截" to Color(0xFF8E5BC8)
-                LogKind.SKILL -> "技能" to Color(0xFFC77B22)
+                // 标签也必须中性：公开战报里不能靠「防空拦截 / 技能」反推攻击方式
+                LogKind.AA -> "未奏效" to Color(0xFF8E5BC8)
+                LogKind.SKILL -> "行动" to Color(0xFFC77B22)
                 LogKind.SYSTEM -> "系统" to MaterialTheme.colorScheme.primary
                 LogKind.CHAT -> "聊天" to Color(0xFF2E8B57)
                 LogKind.INFO -> "提示" to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.80f)

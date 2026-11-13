@@ -63,7 +63,7 @@ private fun torpedoCandidates(ship: Ship, enemy: Board): List<Coord> {
 }
 
 @Composable
-fun BattleScreen(vm: GameViewModel, state: UiState) {
+fun BattleScreen(vm: GameViewModel, state: UiState, onResign: () -> Unit = {}) {
     val view = state.view ?: return
 
     var showEnemy by remember { mutableStateOf(true) }
@@ -166,7 +166,7 @@ fun BattleScreen(vm: GameViewModel, state: UiState) {
                     if (budgetLeft == 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                     Modifier.weight(1f))
                 StatPill("我方", "${view.myAlive.size}", MaterialTheme.colorScheme.tertiary, Modifier.weight(1f))
-                StatPill("敌方", "${view.enemyAlive.size}", MaterialTheme.colorScheme.secondary, Modifier.weight(1f))
+                StatPill("敌方", "${view.enemyAliveCount}", MaterialTheme.colorScheme.secondary, Modifier.weight(1f))
                 StatPill("击沉", "${view.enemySunkTypes.size}", MaterialTheme.colorScheme.error, Modifier.weight(1f))
             }
             Spacer(Modifier.height(10.dp))
@@ -344,7 +344,7 @@ fun BattleScreen(vm: GameViewModel, state: UiState) {
             }
         }
         InfoLine("主炮齐射需点 2 个坐标；鱼雷机需点「起点 + 同行/同列航向点」共 2 点，起点在防空圈外即可打击 AA 舰。两种鱼雷都只在一个点爆炸、只结算一次（可命中水下潜艇），沿途不留轨迹、不锁格，中间格后续仍可用火炮打击；单点攻击自动排除已打过的格子。")
-        InfoLine("战报情报：命中只播报「击中」，不公开被击中的舰种；只有击沉才报舰种。射击记录中的舰种字段也不会随联机状态下发。")
+        InfoLine("战报情报：双方播报只显示「哪一方 + 攻击坐标 + 结果」，不报鱼雷 / 舰载机 / 陆航等攻击方式，也不报开火舰种或被击中舰种；只有击沉才公开舰种。侦察 / 声呐结果与操作提示仅自己可见，敌方编成与存活舰种不下发。")
 
         Spacer(Modifier.height(8.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
@@ -373,6 +373,19 @@ fun BattleScreen(vm: GameViewModel, state: UiState) {
                 modifier = Modifier.weight(1f).padding(start = 2.dp)
             ) { Text("结束回合", fontSize = 11.sp) }
         }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = onResign,
+            enabled = view.phase == RoomPhase.IN_BATTLE,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                "投降 · 结束本局（点击后二次确认）",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+        InfoLine("单机与联机均可投降：确认后本局立即结束、判对方获胜；双方仍可返回房间保持连接再开一局。系统返回键在战斗中也会先弹出确认，不会误退。")
         Spacer(Modifier.height(8.dp))
 
         SectionTitle("战况播报日志")

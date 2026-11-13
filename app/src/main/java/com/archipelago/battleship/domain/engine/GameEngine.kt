@@ -30,10 +30,44 @@ class GameEngine(config: GameConfig = GameConfig()) {
 
     /* ==================== 通用工具 ==================== */
 
-    private fun log(kind: LogKind, text: String) {
-        val e = LogEntry(seq++, state.round, kind, text)
+    /** 公开战报：双方可见，文本只允许「谁 + 坐标 + 结果」，不含攻击方式与舰种。 */
+    private fun log(kind: LogKind, text: String) = logTo(null, kind, text)
+
+    /** 私有反馈：只给操作者自己看（校验失败、侦察结果、技能详情）。 */
+    private fun logOwn(side: Side, kind: LogKind, text: String) = logTo(side, kind, text)
+
+    private fun logTo(owner: Side?, kind: LogKind, text: String) {
+        val e = LogEntry(seq++, state.round, kind, text, owner)
         state = state.copy(log = (state.log + e).takeLast(200))
         revision++
+    }
+
+    /**
+     * 所有攻击结算的唯一公开出口。
+     *
+     * 只播报「哪一方 + 在哪一格 + 什么结果」：不出现鱼雷 / 舰载机 / 陆航 / 主炮齐射等攻击方式，
+     * 也不出现开火舰种或被击中舰种（击沉除外，战果按既有规则公开）。
+     * 这样对手无法从「鱼雷在无山海域打空」反推出潜艇位于炸点直线 4 格之外。
+     * 结果类型统一收敛为 HIT / MISS 两类，避免「防空拦截」「技能」这类标签反过来泄露方式。
+     */
+    private fun reportAttack(side: Side, at: Coord, rep: ShotReport, note: String = "") {
+        val outcome = when (rep.result) {
+            ShotResult.SUNK -> rep.text
+            ShotResult.HIT -> "击中"
+            ShotResult.MISS -> "未命中"
+            ShotResult.INTERCEPTED -> "攻击被拦截"
+            ShotResult.IMMUNE -> "攻击无效"
+            ShotResult.BLOCKED -> "攻击无效"
+        }
+        val kind = if (rep.result == ShotResult.SUNK || rep.result == ShotResult.HIT)
+            LogKind.HIT else LogKind.MISS
+        val prefix = if (note.isEmpty()) "" else "$note · "
+        log(kind, "$prefix${nameOf(side)} 于 ${coordLabel(at)} 发动攻击：$outcome")
+    }
+
+    /** 未产生 ShotReport 的失败攻击（例如整片被拦截），同样只报坐标与结果。 */
+    private fun reportFailed(side: Side, at: Coord, outcome: String) {
+        log(LogKind.MISS, "${nameOf(side)} 于 ${coordLabel(at)} 发动攻击：$outcome")
     }
 
     private fun addChat(side: Side, name: String, text: String, emoji: Boolean) {
@@ -77,11 +111,11 @@ class GameEngine(config: GameConfig = GameConfig()) {
     private fun actionableShip(side: Side, shipId: String): Ship? {
         val ship = state.players[side.ordinal].board.ships.firstOrNull { it.id == shipId }
         if (ship == null) {
-            log(LogKind.INFO, "找不到该舰船")
+            logOwn(side, LogKind.INFO, "找不到该舰船")
             return null
         }
         if (ship.sunk) {
-            log(LogKind.INFO, "【已沉没】${FleetCatalog.label(ship.type)} 已沉没，无法再开火或释放技能")
+            logOwn(side, LogKind.INFO, "【已沉没】${FleetCatalog.label(ship.type)} 已沉没，无法再开火或释放技能")
             return null
         }
         return ship
@@ -105,6 +139,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
             is GameAction.SetReady -> setReady(side, action.ready)
             GameAction.StartBattle -> startBattle(side)
             GameAction.ReturnToLobby -> returnToLobby()
+            GameAction.Resign -> resign(side)
             is GameAction.Fire -> fire(side, action)
             is GameAction.Skill -> useSkill(side, action)
             GameAction.SkipTactical -> skipTactical(side)
@@ -167,7 +202,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
 
     private fun setConfig(side: Side, a: GameAction.SetConfig) {
         if (side != Side.A) {
-            log(LogKind.INFO, "只有房主可以修改地图规则")
+            logOwn(side, LogKind.INFO, "只有房主可以修改地图规则")
             return
         }
         if (state.phase == RoomPhase.IN_BATTLE) return
@@ -202,7 +237,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
     private fun setFleet(side: Side, a: GameAction.SetFleet) {
         if (state.phase == RoomPhase.IN_BATTLE) return
         if (!a.fleet.isValid()) {
-            log(LogKind.INFO, "舰队编成非法，必须 5+4+3+2+1 各一艘")
+            logOwn(side, LogKind.INFO, "舰队编成非法，必须 5+4+3+2+1 各一艘")
             return
         }
         updatePlayer(side) {
@@ -213,10 +248,9 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 board = Rules.buildBoard(state.config, a.placements)
             )
         }
-        log(
-            LogKind.INFO,
-            "${nameOf(side)} 完成舰队编成：" + a.fleet.all().joinToString(" / ") { FleetCatalog.label(it) }
-        )
+        // 双方默认不知道对面选了哪些舰种：编成内容只回给操作者自己
+        logOwn(side, LogKind.INFO, "舰队编成已保存：" + a.fleet.all().joinToString(" / ") { FleetCatalog.label(it) })
+        log(LogKind.SYSTEM, "${nameOf(side)} 已完成舰队编成")
     }
 
     private fun setReady(side: Side, ready: Boolean) {
@@ -225,7 +259,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
         if (ready) {
             val err = Rules.validateFleet(state.config, p.fleet, p.placements)
             if (err != null) {
-                log(LogKind.INFO, "无法准备：$err")
+                logOwn(side, LogKind.INFO, "无法准备：$err")
                 return
             }
         }
@@ -235,18 +269,18 @@ class GameEngine(config: GameConfig = GameConfig()) {
 
     private fun startBattle(side: Side) {
         if (side != Side.A) {
-            log(LogKind.INFO, "只有房主可以开始战斗")
+            logOwn(side, LogKind.INFO, "只有房主可以开始战斗")
             return
         }
         if (state.phase == RoomPhase.IN_BATTLE) return
         if (!state.players[0].ready || !state.players[1].ready) {
-            log(LogKind.INFO, "双方都点击『准备』后才能开始战斗")
+            logOwn(side, LogKind.INFO, "双方都点击『准备』后才能开始战斗")
             return
         }
         for (p in state.players) {
             val err = Rules.validateFleet(state.config, p.fleet, p.placements)
             if (err != null) {
-                log(LogKind.INFO, "${p.name} 布阵非法：$err")
+                logOwn(side, LogKind.INFO, "${p.name} 布阵非法：$err")
                 return
             }
         }
@@ -269,6 +303,32 @@ class GameEngine(config: GameConfig = GameConfig()) {
         revision++
         log(LogKind.SYSTEM, "战斗开始！聊天室已锁定（战斗禁言），单回合限时 180 秒")
         beginTurn(Side.A)
+    }
+
+    /** 投降：立即结束本局并判对方获胜。单机 / 联机共用，联机时由房主权威结算后推给客机。 */
+    private fun resign(side: Side) {
+        if (state.phase != RoomPhase.IN_BATTLE) return
+        val winner = side.other()
+        val result = BattleResult(
+            winner = winner,
+            rounds = state.round,
+            host = statsOf(state.players[0]),
+            guest = statsOf(state.players[1]),
+            reason = BattleEndReason.RESIGN,
+            resigned = side
+        )
+        state = state.copy(
+            phase = RoomPhase.POST_BATTLE_LOBBY,
+            turnPhase = TurnPhase.GAME_OVER,
+            result = result
+        )
+        revision++
+        undoStack.clear()
+        redoStack.clear()
+        log(
+            LogKind.SYSTEM,
+            "${nameOf(side)} 已投降，${nameOf(winner)} 获胜｜共 ${state.round} 回合；点『返回房间』保持连接、解锁聊天、直接开下一局"
+        )
     }
 
     private fun returnToLobby() {
@@ -296,7 +356,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
 
     private fun sendChat(side: Side, a: GameAction.Chat) {
         if (state.phase == RoomPhase.IN_BATTLE) {
-            log(LogKind.INFO, "战斗中禁言，消息未发送")
+            logOwn(side, LogKind.INFO, "战斗中禁言，消息未发送")
             return
         }
         val text = a.text.trim().take(160)
@@ -337,10 +397,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 side, pending.center, AttackKind.LAND_AIR, ShipType.GUNBOAT,
                 ignoresAA = true, disableAAOnHit = false
             )
-            log(
-                LogKind.SKILL,
-                "【陆航空袭】延时 1 回合生效：十字 5 格饱和轰炸 @${coordLabel(pending.center)}（无视一切 AA）"
-            )
+            log(LogKind.SYSTEM, "${nameOf(side)} 标记的区域攻击已生效")
             checkGameOver()
             if (state.phase != RoomPhase.IN_BATTLE) return
         }
@@ -358,7 +415,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
             )
             if (mustSurface) {
                 streak = 0
-                log(LogKind.SKILL, "【强制上浮】${nameOf(side)} 潜艇本回合全部 3 格暴露，可被常规炮击")
+                log(LogKind.SYSTEM, "${nameOf(side)} 一艘舰船本回合已暴露，可被常规攻击命中")
                 board = resolveSubmergedMisses(side, sub, board)
             }
             surfaceNext = false
@@ -420,12 +477,11 @@ class GameEngine(config: GameConfig = GameConfig()) {
         for (rec in owners.values) {
             rec.attacker?.let { addDamage(rec.by, it) }
         }
-        val label = owners.keys.joinToString("、") { coordLabel(it) }
-        log(
-            LogKind.HIT,
-            "【上浮暴露】${nameOf(side)} 潜艇上浮，此前 ${owners.size} 处水花点复核为命中 @$label" +
-                (if (updated.sunk) "，潜艇被击沉！" else "")
-        )
+        // 复核播报同样只报坐标与结果，不提「上浮 / 潜艇 / 潜望镜」这些机制词
+        for ((c, rec) in owners) {
+            log(LogKind.HIT, "${nameOf(rec.by)} 于 ${coordLabel(c)} 的既有攻击复核为命中")
+        }
+        if (updated.sunk) log(LogKind.SYSTEM, "击沉敌方 潜艇！")
         return nb
     }
 
@@ -476,13 +532,13 @@ class GameEngine(config: GameConfig = GameConfig()) {
         if (air && !ignoresAA && intercepted(board, listOf(at))) {
             return ShotReport(
                 board.record(at, ShotResult.INTERCEPTED, by, null, mark),
-                ShotResult.INTERCEPTED, "【防空拦截】战机被击落", LogKind.AA, false
+                ShotResult.INTERCEPTED, "攻击被拦截", LogKind.AA, false
             )
         }
         if (air && board.ships.any { !it.sunk && it.type == ShipType.GUNBOAT && at in it.cells }) {
             return ShotReport(
                 board.record(at, ShotResult.IMMUNE, by, ShipType.GUNBOAT, mark),
-                ShotResult.IMMUNE, "高速炮艇【灵活规避】，航空攻击无效", LogKind.INFO, false
+                ShotResult.IMMUNE, "目标免疫此次攻击", LogKind.INFO, false
             )
         }
         val ship = board.ships.firstOrNull { !it.sunk && at in it.cells && canBeHit(it, at, kind) }
@@ -493,7 +549,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
         if (at in ship.hits) {
             return ShotReport(
                 board.record(at, ShotResult.MISS, by, ship.type, mark),
-                ShotResult.MISS, "该舰格已损毁，重复打击无效", LogKind.MISS, false
+                ShotResult.MISS, "该格重复打击无效", LogKind.MISS, false
             )
         }
         // 【潜望镜一击必沉】水下潜艇的中心第 2 格是唯一暴露点（潜望镜）。
@@ -510,7 +566,6 @@ class GameEngine(config: GameConfig = GameConfig()) {
         // 战报情报规则：只有「击沉」才公开舰种；单纯命中一律只说「击中」，
         // 否则全局广播的 log 会直接告诉对手打中了他哪一艘船。
         val text = when {
-            updated.sunk && periscopeHit -> "命中【潜望镜】${FleetCatalog.label(ship.type)}，整艇直接沉没！"
             updated.sunk -> "击沉敌方 ${FleetCatalog.label(ship.type)}！"
             else -> "击中"
         }
@@ -531,7 +586,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
         if (Rules.isAir(kind) && !ignoresAA && intercepted(board, cells)) {
             board = board.record(center, ShotResult.INTERCEPTED, side, null, false)
             setBoard(enemy, board)
-            log(LogKind.AA, "【防空拦截】战机被击落，${FleetCatalog.label(attackerShip)} 的空袭全部失效 @${coordLabel(center)}")
+            reportFailed(side, center, "攻击被拦截")
             return
         }
         val hitTypes = HashSet<ShipType>()
@@ -542,10 +597,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 addDamage(side, attackerShip)
                 rep.shipHit?.let { hitTypes.add(it) }
             }
-            log(
-                if (rep.damage) LogKind.HIT else LogKind.MISS,
-                "十字打击 ${coordLabel(c)}：${rep.text}"
-            )
+            reportAttack(side, c, rep)
         }
         if (disableAAOnHit && hitTypes.any { it == ShipType.CARRIER || it == ShipType.AA_CRUISER }) {
             board = board.copy(
@@ -554,7 +606,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
                         s.copy(aaDisabledUntil = state.round + 1) else s
                 }
             )
-            log(LogKind.SKILL, "【AA 瘫痪】被命中的航母 / 防空巡洋舰防空网失效 1 个敌方回合")
+            log(LogKind.SYSTEM, "${nameOf(side)} 的一次攻击造成短暂压制效果")
         }
         setBoard(enemy, board)
     }
@@ -579,32 +631,25 @@ class GameEngine(config: GameConfig = GameConfig()) {
         if (intercepted(board, listOf(start))) {
             board = board.record(start, ShotResult.INTERCEPTED, side, null, false)
             setBoard(enemy, board)
-            log(LogKind.AA, "【防空拦截】投雷起点 ${coordLabel(start)} 位于敌方防空圈内，战机被击落，空袭失效")
+            reportFailed(side, start, "攻击被拦截")
             return
         }
         var impact = line.last()
-        var reason = "到达最大射程"
         var invalid = false
         for (i in line.indices) {
             val c = line[i]
             if (c in board.mountains) {
-                if (i == 0) {
-                    invalid = true
-                    reason = "投雷起点即山地"
-                } else {
-                    impact = line[i - 1]
-                    reason = "前方 ${coordLabel(c)} 为山地，撞山前"
-                }
+                if (i == 0) invalid = true
+                else impact = line[i - 1]
                 break
             }
             if (board.ships.any { !it.sunk && c in it.cells }) {
                 impact = c
-                reason = "发现目标"
                 break
             }
         }
         if (invalid) {
-            log(LogKind.INFO, "【鱼雷机空袭】$reason @${coordLabel(line.first())}，本次空袭无效果")
+            logOwn(side, LogKind.INFO, "本次攻击无效果：目标区域不可达")
             setBoard(enemy, board)
             return
         }
@@ -613,10 +658,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
             ShipType.AVIATION_CRUISER, ignoresAA = true, mark = false
         )
         board = rep.board
-        log(
-            if (rep.damage) LogKind.HIT else LogKind.MISS,
-            "【鱼雷机空袭】$reason，鱼雷于 ${coordLabel(impact)} 爆炸：${rep.text}"
-        )
+        reportAttack(side, impact, rep)
         if (rep.damage) addDamage(side, ShipType.AVIATION_CRUISER)
         setBoard(enemy, board)
     }
@@ -626,23 +668,23 @@ class GameEngine(config: GameConfig = GameConfig()) {
         val me = state.players[side.ordinal]
         val ship = actionableShip(side, a.shipId) ?: return
         if (ship.id in me.actedShipIds) {
-            log(LogKind.INFO, "该舰本回合已行动")
+            logOwn(side, LogKind.INFO, "该舰本回合已行动")
             return
         }
         if (state.turnPhase != TurnPhase.ATTACK) {
-            log(LogKind.INFO, "请先点击「进入阶段二 · 开始攻击」，再选择开火坐标")
+            logOwn(side, LogKind.INFO, "请先点击「进入阶段二 · 开始攻击」，再选择开火坐标")
             return
         }
         val budget = Rules.attacksPerTurn(me.board.ships.count { !it.sunk })
         if (me.actedShipIds.size >= budget) {
-            log(LogKind.INFO, "本回合 $budget 次攻击名额已用尽，请点击「结束回合」")
+            logOwn(side, LogKind.INFO, "本回合 $budget 次攻击名额已用尽，请点击「结束回合」")
             return
         }
         val enemy = side.other()
         val eb = boardOf(enemy)
         val t = a.target
         if (!t.inBounds(eb.size) || t in eb.mountains) {
-            log(LogKind.INFO, "目标非法：越界或为不可攻击的山地")
+            logOwn(side, LogKind.INFO, "目标非法：越界或为不可攻击的山地")
             return
         }
         if (ship.type == ShipType.SUBMARINE) {
@@ -650,7 +692,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
             return
         }
         if (t in eb.attackedPoints) {
-            log(LogKind.INFO, "该坐标已攻击过（单点攻击去重），请换一个格子")
+            logOwn(side, LogKind.INFO, "该坐标已攻击过（单点攻击去重），请换一个格子")
             return
         }
         val aliveCount = me.board.ships.count { !it.sunk }
@@ -662,10 +704,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
         }
         val rep = applyShot(eb, t, kind, side, ship.type, ignoresAA = lastGun, mark = true)
         setBoard(enemy, rep.board)
-        log(
-            rep.kind,
-            "${nameOf(side)} · ${FleetCatalog.label(ship.type)}${if (lastGun) "【绝境副炮】" else ""} @${coordLabel(t)}：${rep.text}"
-        )
+        reportAttack(side, t, rep)
         if (rep.damage) addDamage(side, ship.type)
         markActed(side, ship.id)
         checkGameOver()
@@ -683,11 +722,11 @@ class GameEngine(config: GameConfig = GameConfig()) {
     private fun fireTorpedo(side: Side, ship: Ship, target: Coord) {
         val center = if (ship.cells.size > 1) ship.cells[1] else ship.cells[0]
         if (target.r != center.r && target.c != center.c) {
-            log(LogKind.INFO, "鱼雷只能沿潜艇所在行或列的直线方向发射")
+            logOwn(side, LogKind.INFO, "鱼雷只能沿潜艇所在行或列的直线方向发射")
             return
         }
         if (target == center || target.manhattan(center) > 4) {
-            log(LogKind.INFO, "鱼雷射程为直线 4 格内")
+            logOwn(side, LogKind.INFO, "鱼雷射程为直线 4 格内")
             return
         }
         val dr = when {
@@ -703,27 +742,21 @@ class GameEngine(config: GameConfig = GameConfig()) {
         val enemy = side.other()
         var board = boardOf(enemy)
         val line = ArrayList<Coord>(4)
-        var blockedByMountain = false
         for (step in 1..4) {
             val c = Coord(center.r + dr * step, center.c + dc * step)
             if (!c.inBounds(board.size)) break
-            if (c in board.mountains) {
-                blockedByMountain = true
-                break
-            }
+            if (c in board.mountains) break
             line.add(c)
         }
-        // 只说发射、不说从哪一格发射：这是全局广播日志，坐标等于直接交出潜艇位置
-        log(LogKind.SKILL, "${nameOf(side)} 发射【潜航鱼雷】，沿直线最多推进 4 格")
+        // 发射细节只回给操作者：一旦全局广播「有鱼雷出击」，对手就能从炸点反推发射源
+        logOwn(side, LogKind.SKILL, "已发射潜航鱼雷，沿直线最多推进 4 格")
         if (line.isEmpty()) {
-            log(LogKind.INFO, "【潜航鱼雷】前方即山地或棋盘边缘，本次发射无效果")
+            logOwn(side, LogKind.INFO, "本次发射无效果：前方即山地或棋盘边缘")
         } else {
             var impact = line.last()
-            var reason = if (blockedByMountain) "撞山前" else "到达最大射程"
             for (c in line) {
                 if (board.ships.any { s -> !s.sunk && c in s.cells }) {
                     impact = c
-                    reason = "发现目标"
                     break
                 }
             }
@@ -732,13 +765,13 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 ShipType.SUBMARINE, ignoresAA = true, mark = false
             )
             board = rep.board
-            log(rep.kind, "【潜航鱼雷】$reason，于 ${coordLabel(impact)} 爆炸：${rep.text}")
+            reportAttack(side, impact, rep)
             if (rep.damage) addDamage(side, ShipType.SUBMARINE)
         }
         setBoard(enemy, board)
         updatePlayer(side) { it.copy(subSurfaceNextTurn = true) }
         markActed(side, ship.id)
-        log(LogKind.SYSTEM, "${nameOf(side)} 潜艇下 1 回合将【强制上浮】")
+        logOwn(side, LogKind.SYSTEM, "本舰下 1 回合将强制上浮")
         checkGameOver()
     }
 
@@ -750,50 +783,50 @@ class GameEngine(config: GameConfig = GameConfig()) {
         val ship = actionableShip(side, a.shipId) ?: return
         val kind = a.kind
         if (Rules.skillFor(ship.type) != kind) {
-            log(LogKind.INFO, "该舰不具备此技能")
+            logOwn(side, LogKind.INFO, "该舰不具备此技能")
             return
         }
         val tactical = Rules.isTactical(kind)
         if (tactical) {
             if (state.turnPhase != TurnPhase.TACTICAL || me.tacticalUsed) {
-                log(LogKind.INFO, "阶段一已结束或本回合战术行动已使用")
+                logOwn(side, LogKind.INFO, "阶段一已结束或本回合战术行动已使用")
                 return
             }
         } else {
             if (ship.id in me.actedShipIds) {
-                log(LogKind.INFO, "该舰本回合已行动")
+                logOwn(side, LogKind.INFO, "该舰本回合已行动")
                 return
             }
             if (state.turnPhase != TurnPhase.ATTACK) {
-                log(LogKind.INFO, "请先点击「进入阶段二 · 开始攻击」，再释放攻击技能")
+                logOwn(side, LogKind.INFO, "请先点击「进入阶段二 · 开始攻击」，再释放攻击技能")
                 return
             }
             val budget = Rules.attacksPerTurn(me.board.ships.count { !it.sunk })
             if (me.actedShipIds.size >= budget) {
-                log(LogKind.INFO, "本回合 $budget 次攻击名额已用尽")
+                logOwn(side, LogKind.INFO, "本回合 $budget 次攻击名额已用尽")
                 return
             }
         }
         if (state.round < Rules.skillMinRound(kind)) {
-            log(LogKind.INFO, "【${Rules.skillLabel(kind)}】第 ${Rules.skillMinRound(kind)} 回合起才可使用")
+            logOwn(side, LogKind.INFO, "【${Rules.skillLabel(kind)}】第 ${Rules.skillMinRound(kind)} 回合起才可使用")
             return
         }
         val readyRound = me.cooldowns[kind.name] ?: 0
         if (state.round < readyRound) {
-            log(LogKind.INFO, "技能冷却中，第 $readyRound 回合可再次使用")
+            logOwn(side, LogKind.INFO, "技能冷却中，第 $readyRound 回合可再次使用")
             return
         }
         val used = me.useCounts[kind.name] ?: 0
         if (used >= Rules.skillLimit(kind)) {
-            log(LogKind.INFO, "【${Rules.skillLabel(kind)}】全局次数已用尽")
+            logOwn(side, LogKind.INFO, "【${Rules.skillLabel(kind)}】全局次数已用尽")
             return
         }
         val center = a.targets.firstOrNull() ?: run {
-            log(LogKind.INFO, "缺少目标坐标")
+            logOwn(side, LogKind.INFO, "缺少目标坐标")
             return
         }
         if (!center.inBounds(boardOf(side.other()).size)) {
-            log(LogKind.INFO, "目标坐标越界")
+            logOwn(side, LogKind.INFO, "目标坐标越界")
             return
         }
 
@@ -802,7 +835,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 val eb = boardOf(side.other())
                 val cells = crossCells(center, eb.size)
                 if (intercepted(eb, cells)) {
-                    log(LogKind.AA, "【防空拦截】舰载侦察机被击落 @${coordLabel(center)}")
+                    logOwn(side, LogKind.AA, "本次侦察被拦截 @${coordLabel(center)}")
                 } else {
                     val n = eb.ships.count { s ->
                         !s.sunk && s.type != ShipType.SUBMARINE && s.cells.any { it in cells }
@@ -810,9 +843,10 @@ class GameEngine(config: GameConfig = GameConfig()) {
                     // 扫描成功才留痕：只记录「哪 5 格被扫过」，不记录船的位置，
                     // 棋盘据此画放大镜标记；撤销 / 重做随 state 快照自然回退。
                     setBoard(side.other(), eb.copy(reconCells = eb.reconCells + cells))
-                    log(
-                        LogKind.SKILL,
-                        "${nameOf(side)}【舰载侦察机】@${coordLabel(center)}：十字 5 格已完成扫描（棋盘标记「已侦察」），水面舰信号 ${if (n == 0) "无" else "$n 个"}（仅报数量，不报坐标）"
+                    // 侦察结果属于己方情报，绝不广播给对手；棋盘放大镜标记仍会留在敌方海域
+                    logOwn(
+                        side, LogKind.SKILL,
+                        "【舰载侦察机】@${coordLabel(center)}：十字 5 格扫描完成，水面舰信号 ${if (n == 0) "无" else "$n 个"}（仅报数量，不报坐标）"
                     )
                 }
             }
@@ -821,9 +855,9 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 val n = boardOf(side.other()).ships.count { s ->
                     !s.sunk && s.type == ShipType.SUBMARINE && s.cells.any { it in cells }
                 }
-                log(
-                    LogKind.SKILL,
-                    "${nameOf(side)}【主动水听声呐】@${coordLabel(center)}：${if (n > 0) "发现潜艇信号（无视水下隐蔽）" else "未发现潜艇信号"}"
+                logOwn(
+                    side, LogKind.SKILL,
+                    "【主动水听声呐】@${coordLabel(center)}：${if (n > 0) "发现潜艇信号（无视水下隐蔽）" else "未发现潜艇信号"}"
                 )
             }
             SkillKind.EVASIVE_MANEUVER -> {
@@ -839,29 +873,29 @@ class GameEngine(config: GameConfig = GameConfig()) {
                     else -> null
                 }
                 if (err != null) {
-                    log(LogKind.INFO, "紧急规避机动失败：$err")
+                    logOwn(side, LogKind.INFO, "紧急规避机动失败：$err")
                     return
                 }
                 val kept = ship.cells.mapIndexedNotNull { i, c -> if (c in ship.hits) i else null }
                 val newHits = kept.mapNotNull { newCells.getOrNull(it) }.toSet()
                 val moved = ship.copy(origin = center, orientation = newO, cells = newCells, hits = newHits)
                 setBoard(side, own.copy(ships = own.ships.map { if (it.id == ship.id) moved else it }))
-                log(LogKind.SKILL, "敌方驱逐舰已实施紧急规避机动（向双方全局播报，保留已受损伤）")
+                log(LogKind.SYSTEM, "${nameOf(side)} 一艘舰船已变更部署")
             }
             SkillKind.SALVO -> {
                 if (a.targets.size < 2) {
-                    log(LogKind.INFO, "主炮齐射需要选择 2 个不同坐标")
+                    logOwn(side, LogKind.INFO, "主炮齐射需要选择 2 个不同坐标")
                     return
                 }
                 val p1 = a.targets[0]
                 val p2 = a.targets[1]
                 val eb = boardOf(side.other())
                 if (p1 == p2 || p1.chebyshev(p2) > 4) {
-                    log(LogKind.INFO, "两发需为不同坐标且间距 ≤ 4 格")
+                    logOwn(side, LogKind.INFO, "两发需为不同坐标且间距 ≤ 4 格")
                     return
                 }
                 if (listOf(p1, p2).any { !it.inBounds(eb.size) || it in eb.mountains || it in eb.attackedPoints }) {
-                    log(LogKind.INFO, "齐射坐标非法（山地 / 越界 / 已攻击过）")
+                    logOwn(side, LogKind.INFO, "齐射坐标非法（山地 / 越界 / 已攻击过）")
                     return
                 }
                 if (state.turnPhase == TurnPhase.TACTICAL) {
@@ -872,31 +906,28 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 for (t in listOf(p1, p2)) {
                     val rep = applyShot(board, t, AttackKind.GUN, side, ShipType.BATTLESHIP, ignoresAA = true, mark = true)
                     board = rep.board
-                    log(rep.kind, "【主炮齐射】${coordLabel(t)}：${rep.text}")
+                    reportAttack(side, t, rep)
                     if (rep.damage) addDamage(side, ShipType.BATTLESHIP)
                 }
                 setBoard(side.other(), board)
             }
             SkillKind.TORPEDO_BOMBER -> {
                 if (a.targets.size < 2) {
-                    log(LogKind.INFO, "【鱼雷机空袭】需先点突防起点、再点同行或同列的一格指定航向")
+                    logOwn(side, LogKind.INFO, "【鱼雷机空袭】需先点突防起点、再点同行或同列的一格指定航向")
                     return
                 }
                 val line = Rules.torpedoBomberLine(
                     a.targets[0], a.targets[1], boardOf(side.other()).size
                 )
                 if (line.size < 2) {
-                    log(LogKind.INFO, "【鱼雷机空袭】航向非法：第 2 个点必须与起点同行或同列")
+                    logOwn(side, LogKind.INFO, "【鱼雷机空袭】航向非法：第 2 个点必须与起点同行或同列")
                     return
                 }
                 if (state.turnPhase == TurnPhase.TACTICAL) {
                     state = state.copy(turnPhase = TurnPhase.ATTACK)
                     revision++
                 }
-                log(
-                    LogKind.SKILL,
-                    "${nameOf(side)} 派出【鱼雷机空袭】@${coordLabel(line.first())}：投雷起点在防空圈外即可实施视距外打击，最多推进 ${line.size} 格，只在爆炸点结算、不显示轨迹"
-                )
+                logOwn(side, LogKind.SKILL, "【鱼雷机空袭】已投雷，最多推进 ${line.size} 格，只在爆炸点结算")
                 applyTorpedoBomberLine(side, line)
             }
             SkillKind.INCENDIARY -> {
@@ -904,7 +935,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
                     state = state.copy(turnPhase = TurnPhase.ATTACK)
                     revision++
                 }
-                log(LogKind.SKILL, "${nameOf(side)} 发射【高能燃烧弹】@${coordLabel(center)}：纯炮击无视 AA")
+                logOwn(side, LogKind.SKILL, "【高能燃烧弹】已发射 @${coordLabel(center)}")
                 applyCross(side, center, AttackKind.INCENDIARY, ShipType.FIRE_CRUISER, true, true)
             }
             SkillKind.AIR_STRIKE_CALL -> {
@@ -913,10 +944,8 @@ class GameEngine(config: GameConfig = GameConfig()) {
                     revision++
                 }
                 updatePlayer(side) { it.copy(pendingStrike = PendingStrike(center, state.round)) }
-                log(
-                    LogKind.SKILL,
-                    "${nameOf(side)}【呼叫陆航空袭】锁定 ${coordLabel(center)}，将在己方下一回合开始时无视一切 AA 饱和轰炸十字 5 格"
-                )
+                logOwn(side, LogKind.SKILL, "已标记 ${coordLabel(center)}，将在己方下一回合开始时生效")
+                log(LogKind.SYSTEM, "${nameOf(side)} 已标记 ${coordLabel(center)}，该区域攻击将在其下一回合生效")
             }
         }
 
@@ -1021,6 +1050,10 @@ class GameEngine(config: GameConfig = GameConfig()) {
             ships = enemy.board.ships.filter { it.sunk },
             shots = cleanShots(enemy.board.shots)
         )
+        // 敌方选了哪些舰、还剩哪几艘，都属于战前情报：报文里也不下发。
+        // 大厅 / 棋盘只显示「我方编成」和「敌方剩余数量」。
+        val hiddenFleet = FleetConfig()
+        val enemyAliveCount = enemy.board.ships.count { !it.sunk }
         val myBoardView = me.board.copy(shots = cleanShots(me.board.shots))
         return GameView(
             viewer = side,
@@ -1033,17 +1066,18 @@ class GameEngine(config: GameConfig = GameConfig()) {
             guestName = s.players[1].name,
             hostReady = s.players[0].ready,
             guestReady = s.players[1].ready,
-            hostFleet = s.players[0].fleet,
-            guestFleet = s.players[1].fleet,
+            hostFleet = if (side == Side.A) me.fleet else hiddenFleet,
+            guestFleet = if (side == Side.B) me.fleet else hiddenFleet,
             myBoard = myBoardView,
             enemyBoard = redacted,
             enemySunkTypes = enemy.board.ships.filter { it.sunk }.map { it.type },
             myAlive = me.board.ships.filter { !it.sunk }.map { it.type },
-            enemyAlive = enemy.board.ships.filter { !it.sunk }.map { it.type },
+            enemyAlive = emptyList(),
+            enemyAliveCount = enemyAliveCount,
             legalTargets = if (s.phase == RoomPhase.IN_BATTLE && s.turn == side) legalTargetsFor(side) else emptyList(),
             skills = skillAvailabilities(side),
             myActed = me.actedShipIds.toList(),
-            log = s.log,
+            log = s.log.filter { it.owner == null || it.owner == side },
             chat = s.chat,
             result = s.result,
             revision = revision,
@@ -1071,7 +1105,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
             val t = legal[rnd.nextInt(legal.size)]
             val rep = applyShot(boardOf(side.other()), t, AttackKind.GUN, side, ship.type, ignoresAA = true, mark = true)
             setBoard(side.other(), rep.board)
-            log(rep.kind, "【180s 超时托管】${nameOf(side)} 随机常规炮击 ${coordLabel(t)}：${rep.text}")
+            reportAttack(side, t, rep, "超时托管")
             if (rep.damage) addDamage(side, ship.type)
             markActed(side, id)
             checkGameOver()

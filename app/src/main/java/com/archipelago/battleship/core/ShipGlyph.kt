@@ -9,7 +9,7 @@ import com.archipelago.battleship.domain.model.ShipType
 import kotlin.math.max
 
 /**
- * 《战舰世界》风格舰种矢量标识（Compose Canvas 手绘）：
+ * 原创舰种矢量标识（Compose Canvas 手绘）：
  *  潜艇        = 朝舰首实心三角 + 尾部一条垂直竖线
  *  驱逐/反潜/炮艇 = 纯实心锐角三角（反潜舰内加圆点、炮艇内加小横线）
  *  巡洋舰      = 矩形船体 + 三角舰首 + 一条斜杠 /

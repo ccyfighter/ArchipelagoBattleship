@@ -3,6 +3,7 @@ package com.archipelago.battleship.ui
 import android.Manifest
 import android.os.Build
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -14,18 +15,27 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.archipelago.battleship.core.AppThemeMode
+import com.archipelago.battleship.domain.model.BattleEndReason
 import com.archipelago.battleship.domain.model.BattleResult
 import com.archipelago.battleship.domain.model.FleetCatalog
 import com.archipelago.battleship.domain.model.RoomPhase
@@ -38,6 +48,8 @@ import com.archipelago.battleship.ui.screens.HomeScreen
 import com.archipelago.battleship.ui.screens.LobbyScreen
 import com.archipelago.battleship.ui.screens.ScannerScreen
 import kotlinx.coroutines.delay
+
+private enum class ConfirmDialog { NONE, LEAVE_ROOM, BATTLE_MENU, RESIGN }
 
 @Composable
 fun AppRoot(vm: GameViewModel, state: UiState, activity: ComponentActivity) {
@@ -61,32 +73,110 @@ fun AppRoot(vm: GameViewModel, state: UiState, activity: ComponentActivity) {
         }
     }
 
-    val gridInk = MaterialTheme.colorScheme.primary.copy(alpha = 0.055f)
-    val bandInk = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+    var confirm by remember { mutableStateOf(ConfirmDialog.NONE) }
+    // 大厅里的「离开房间」按钮与系统返回键共用同一个确认框
+    LaunchedEffect(state.confirmLeave) {
+        if (state.confirmLeave) confirm = ConfirmDialog.LEAVE_ROOM
+    }
+    val view = state.view
+    val resultShowing = state.screen == Screen.BATTLE &&
+        view != null && view.phase == RoomPhase.POST_BATTLE_LOBBY && view.result != null
+
+    /**
+     * 全页面系统返回键统一入口（HOME 交给系统默认退出 App）。
+     * 扫码 / 布阵直接回上一层；大厅与战斗先弹二次确认，避免误触断线或误投。
+     * 结算弹窗显示时交给 ResultDialog 自己的 onDismissRequest 处理。
+     */
+    BackHandler(
+        enabled = state.screen != Screen.HOME && confirm == ConfirmDialog.NONE
+    ) {
+        when (state.screen) {
+            Screen.SCANNER -> vm.closeScanner()
+            Screen.FLEET -> vm.navigate(Screen.LOBBY)
+            Screen.LOBBY -> confirm = ConfirmDialog.LEAVE_ROOM
+            // 结算弹窗显示时按返回等同「返回房间」；若弹窗自己已消费返回键，这里不会被触发
+            Screen.BATTLE -> if (resultShowing) vm.returnToLobby()
+            else confirm = ConfirmDialog.BATTLE_MENU
+            Screen.HOME -> Unit
+        }
+    }
+
+    val primary = MaterialTheme.colorScheme.primary
     val density = LocalDensity.current
     val gridStep = with(density) { 56.dp.toPx() }
     val bandHeight = with(density) { 3.dp.toPx() }
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        // 全局海图网格底纹：极淡，不与前景卡片抢视觉
+        // 三套主题各自的全局底纹：都是矢量绘制，不与前景卡片抢视觉
         Canvas(modifier = Modifier.fillMaxSize()) {
-            var x = 0f
-            while (x < size.width) {
-                drawLine(gridInk, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
-                x += gridStep
+            when (state.theme) {
+                AppThemeMode.PAPER -> {
+                    val ink = primary.copy(alpha = 0.055f)
+                    var x = 0f
+                    while (x < size.width) {
+                        drawLine(ink, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
+                        x += gridStep
+                    }
+                    var y = 0f
+                    while (y < size.height) {
+                        drawLine(ink, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
+                        y += gridStep
+                    }
+                    // 泛旧坐标纸的两道折痕
+                    val fold = primary.copy(alpha = 0.045f)
+                    drawLine(fold, Offset(size.width * 0.33f, 0f), Offset(size.width * 0.33f, size.height), strokeWidth = 2f)
+                    drawLine(fold, Offset(0f, size.height * 0.62f), Offset(size.width, size.height * 0.62f), strokeWidth = 2f)
+                    drawRect(primary.copy(alpha = 0.10f), topLeft = Offset.Zero, size = Size(size.width, bandHeight))
+                }
+                AppThemeMode.WARROOM -> {
+                    // 情报室作战桌：疏格 + 四角定位十字 + 台灯暖色顶带
+                    val ink = primary.copy(alpha = 0.085f)
+                    val step = gridStep * 2f
+                    var x = step
+                    while (x < size.width) {
+                        drawLine(ink, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.2f)
+                        x += step
+                    }
+                    var y = step
+                    while (y < size.height) {
+                        drawLine(ink, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.2f)
+                        y += step
+                    }
+                    val mark = primary.copy(alpha = 0.28f)
+                    val arm = 10f
+                    for (cx in listOf(18f, size.width - 18f)) {
+                        for (cy in listOf(18f, size.height - 18f)) {
+                            drawLine(mark, Offset(cx - arm, cy), Offset(cx + arm, cy), strokeWidth = 1.4f)
+                            drawLine(mark, Offset(cx, cy - arm), Offset(cx, cy + arm), strokeWidth = 1.4f)
+                        }
+                    }
+                    drawRect(primary.copy(alpha = 0.16f), topLeft = Offset.Zero, size = Size(size.width, bandHeight * 2f))
+                }
+                AppThemeMode.SONAR -> {
+                    // 舰桥雷达：同心环 + 十字基准 + 一条固定方位线
+                    val c = Offset(size.width / 2f, size.height / 2f)
+                    val radius = maxOf(size.width, size.height) * 0.62f
+                    for (k in 1..6) {
+                        drawCircle(
+                            primary.copy(alpha = 0.055f), radius = radius * k / 6f,
+                            center = c, style = Stroke(1.4f)
+                        )
+                    }
+                    drawLine(primary.copy(alpha = 0.075f), Offset(0f, c.y), Offset(size.width, c.y), strokeWidth = 1f)
+                    drawLine(primary.copy(alpha = 0.075f), Offset(c.x, 0f), Offset(c.x, size.height), strokeWidth = 1f)
+                    drawLine(
+                        primary.copy(alpha = 0.16f), c,
+                        Offset(c.x + radius * 0.72f, c.y - radius * 0.45f), strokeWidth = 2f
+                    )
+                    drawRect(primary.copy(alpha = 0.12f), topLeft = Offset.Zero, size = Size(size.width, bandHeight))
+                }
             }
-            var y = 0f
-            while (y < size.height) {
-                drawLine(gridInk, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
-                y += gridStep
-            }
-            drawRect(bandInk, topLeft = Offset.Zero, size = Size(size.width, bandHeight))
         }
 
         when (state.screen) {
             Screen.HOME -> HomeScreen(vm, state)
             Screen.LOBBY -> LobbyScreen(vm, state)
             Screen.FLEET -> FleetScreen(vm, state)
-            Screen.BATTLE -> BattleScreen(vm, state)
+            Screen.BATTLE -> BattleScreen(vm, state, onResign = { confirm = ConfirmDialog.RESIGN })
             Screen.SCANNER -> ScannerScreen(activity, vm::onScanResult, vm::closeScanner)
         }
 
@@ -115,26 +205,122 @@ fun AppRoot(vm: GameViewModel, state: UiState, activity: ComponentActivity) {
             }
         }
 
-        val view = state.view
-        if (
-            state.screen == Screen.BATTLE &&
-            view != null &&
-            view.phase == RoomPhase.POST_BATTLE_LOBBY &&
-            view.result != null
-        ) {
+        if (resultShowing && view != null && view.result != null) {
             ResultDialog(view.result, view.viewer, vm::returnToLobby)
         }
     }
+
+    when (confirm) {
+        ConfirmDialog.LEAVE_ROOM -> ConfirmLeaveRoom(
+            onConfirm = { confirm = ConfirmDialog.NONE; vm.cancelLeaveRoom(); vm.leaveRoom() },
+            onDismiss = { confirm = ConfirmDialog.NONE; vm.cancelLeaveRoom() }
+        )
+        ConfirmDialog.BATTLE_MENU -> BattleBackMenu(
+            onResign = { confirm = ConfirmDialog.RESIGN },
+            onLeave = { confirm = ConfirmDialog.NONE; vm.cancelLeaveRoom(); vm.leaveRoom() },
+            onDismiss = { confirm = ConfirmDialog.NONE }
+        )
+        ConfirmDialog.RESIGN -> ConfirmResign(
+            onConfirm = { confirm = ConfirmDialog.NONE; vm.resign() },
+            onDismiss = { confirm = ConfirmDialog.NONE }
+        )
+        ConfirmDialog.NONE -> Unit
+    }
+}
+
+@Composable
+private fun ConfirmLeaveRoom(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("离开房间？", fontWeight = FontWeight.Bold) },
+        text = {
+            Text(
+                "将返回首页并断开当前连接（联机时房主关闭房间、客机退出房间）。尚未结束的对局不会保存。",
+                fontSize = 13.sp
+            )
+        },
+        confirmButton = { Button(onClick = onConfirm) { Text("确认离开") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("继续留在房间") } }
+    )
+}
+
+@Composable
+private fun BattleBackMenu(
+    onResign: () -> Unit,
+    onLeave: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("离开对局？", fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text(
+                    "战斗中不能直接返回上一层。可以投降结束本局，或直接返回首页（联机时会断开房间）。",
+                    fontSize = 13.sp
+                )
+                Spacer(Modifier.height(6.dp))
+                TextButton(onClick = onLeave) {
+                    Text("或：返回首页（断开房间）", fontSize = 12.sp)
+                }
+            }
+        },
+        confirmButton = { Button(onClick = onResign) { Text("投降结束本局") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("继续战斗") } }
+    )
+}
+
+@Composable
+private fun ConfirmResign(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                "确认投降？",
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.error
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    "投降会立即结束本局并判对方获胜，本回合未完成的行动全部作废，且无法撤销。",
+                    fontSize = 13.sp
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "结束后双方仍可点「返回房间」保持连接、解锁聊天，直接开启下一局。",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.80f)
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+            ) { Text("确认投降") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("继续战斗") } }
+    )
 }
 
 @Composable
 private fun ResultDialog(result: BattleResult, viewer: Side, onReturn: () -> Unit) {
     val win = result.winner == viewer
+    val resigned = result.reason == BattleEndReason.RESIGN
+    val title = when {
+        resigned && win -> "对方已投降 · 你获胜"
+        resigned -> "你已投降 · 本局结束"
+        win -> "胜利 · 敌方舰队全灭"
+        else -> "战败 · 我方舰队全灭"
+    }
     AlertDialog(
-        onDismissRequest = { },
+        // 结算弹窗不能再吞掉返回键：按系统返回等同「返回房间」
+        onDismissRequest = onReturn,
         title = {
             Text(
-                if (win) "胜利 · 敌方舰队全灭" else "战败 · 我方舰队全灭",
+                title,
                 fontWeight = FontWeight.Bold,
                 color = if (win) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
             )
@@ -142,6 +328,14 @@ private fun ResultDialog(result: BattleResult, viewer: Side, onReturn: () -> Uni
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text("总回合数：${result.rounds}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
+                if (resigned) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "结束方式：一方主动投降",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
                 SurfaceCard(accent = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)) {
                     StatBlock("房主", result.host)

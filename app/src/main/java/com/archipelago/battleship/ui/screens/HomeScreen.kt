@@ -2,6 +2,7 @@ package com.archipelago.battleship.ui.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -17,11 +18,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.archipelago.battleship.core.AppThemeMode
+import com.archipelago.battleship.core.BattleScene
+import com.archipelago.battleship.core.themeLabel
 import com.archipelago.battleship.ui.GameViewModel
 import com.archipelago.battleship.ui.Mode
 import com.archipelago.battleship.ui.UiState
@@ -46,32 +50,44 @@ fun HomeScreen(vm: GameViewModel, state: UiState) {
     ) {
         Spacer(Modifier.height(8.dp))
         SurfaceCard(accent = MaterialTheme.colorScheme.primary.copy(alpha = 0.70f)) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
+            // 封面：一张海图作战态势图，战列舰开火 / 舰载机投弹 / 潜艇射鱼雷同框
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(178.dp)
+                    .clip(RoundedCornerShape(10.dp))
             ) {
-                GameLogo(modifier = Modifier.size(118.dp))
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "群岛海战棋",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    "ARCHIPELAGO  ·  BATTLESHIP",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
-                Text(
-                    "5+4+3+2+1 五舰制 · 面对面战术战棋",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
-                    modifier = Modifier.padding(top = 4.dp)
-                )
+                BattleScene(Modifier.fillMaxSize())
             }
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                GameLogo(modifier = Modifier.size(52.dp))
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "群岛海战棋",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        "ARCHIPELAGO  ·  BATTLESHIP",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "5+4+3+2+1 五舰制 · 面对面战术战棋 · 全部图形为原创矢量绘制",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+            )
         }
         Spacer(Modifier.height(8.dp))
         SurfaceCard {
@@ -128,17 +144,20 @@ fun HomeScreen(vm: GameViewModel, state: UiState) {
             }
         }
 
-        SectionTitle("外观")
+        SectionTitle("外观 · 三套原创主题")
         SurfaceCard {
             Row(modifier = Modifier.fillMaxWidth()) {
-                ChipButton("机舱手绘坐标纸", state.theme == AppThemeMode.PAPER, true) {
-                    if (state.theme != AppThemeMode.PAPER) vm.toggleTheme()
+                ChipButton("坐标纸", state.theme == AppThemeMode.PAPER, true) {
+                    vm.setTheme(AppThemeMode.PAPER)
                 }
-                ChipButton("深海战术声呐雷达", state.theme == AppThemeMode.SONAR, true) {
-                    if (state.theme != AppThemeMode.SONAR) vm.toggleTheme()
+                ChipButton("情报室", state.theme == AppThemeMode.WARROOM, true) {
+                    vm.setTheme(AppThemeMode.WARROOM)
+                }
+                ChipButton("声呐雷达", state.theme == AppThemeMode.SONAR, true) {
+                    vm.setTheme(AppThemeMode.SONAR)
                 }
             }
-            InfoLine("两套主题同时作用于界面与棋盘；棋盘外圈为深墨蓝坐标标尺带。")
+            InfoLine("当前：${themeLabel(state.theme)}。三套主题同时作用于界面、全局底纹、棋盘与首页封面；均只使用原创矢量图形，不含任何外部素材或版权内容。")
         }
         Spacer(Modifier.height(10.dp))
         SurfaceCard {

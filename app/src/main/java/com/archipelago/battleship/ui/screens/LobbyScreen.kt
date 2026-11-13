@@ -76,7 +76,7 @@ fun LobbyScreen(vm: GameViewModel, state: UiState) {
                 InfoLine("若一直停在这里：① 两台手机装同一版本 APK；② 房主房间仍开着；③ 两机在同一 Wi-Fi / 热点；④ 必要时让房主重开房间后重新扫码。")
                 Spacer(Modifier.height(8.dp))
             }
-            OutlinedButton(onClick = { vm.leaveRoom() }, modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = { vm.requestLeaveRoom() }, modifier = Modifier.fillMaxWidth()) {
                 Text("返回首页")
             }
         }
@@ -112,8 +112,8 @@ fun LobbyScreen(vm: GameViewModel, state: UiState) {
         Spacer(Modifier.height(6.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { vm.toggleTheme() }, modifier = Modifier.weight(1f)) { Text("切换主题") }
-            OutlinedButton(onClick = { vm.leaveRoom() }, modifier = Modifier.weight(1f)) { Text("离开房间") }
+            OutlinedButton(onClick = { vm.toggleTheme() }, modifier = Modifier.weight(1f)) { Text("切换主题（3 套）") }
+            OutlinedButton(onClick = { vm.requestLeaveRoom() }, modifier = Modifier.weight(1f)) { Text("离开房间") }
         }
         Spacer(Modifier.height(8.dp))
 

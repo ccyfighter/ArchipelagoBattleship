@@ -49,7 +49,8 @@ data class UiState(
     val guestConnected: Boolean = false,
     val timerSeconds: Int = 180,
     val toast: String = "",
-    val manualJoin: Boolean = false
+    val manualJoin: Boolean = false,
+    val confirmLeave: Boolean = false
 )
 
 /**
@@ -131,10 +132,21 @@ class GameViewModel : ViewModel() {
         updateUi { it.copy(screen = screen) }
     }
 
+    /** 三套主题循环：坐标纸 → 情报室 → 声呐雷达 → 坐标纸。 */
     fun toggleTheme() {
         updateUi {
-            it.copy(theme = if (it.theme == AppThemeMode.PAPER) AppThemeMode.SONAR else AppThemeMode.PAPER)
+            it.copy(
+                theme = when (it.theme) {
+                    AppThemeMode.PAPER -> AppThemeMode.WARROOM
+                    AppThemeMode.WARROOM -> AppThemeMode.SONAR
+                    AppThemeMode.SONAR -> AppThemeMode.PAPER
+                }
+            )
         }
+    }
+
+    fun setTheme(mode: AppThemeMode) {
+        updateUi { it.copy(theme = mode) }
     }
 
     fun showManualJoin(show: Boolean) {
@@ -155,6 +167,15 @@ class GameViewModel : ViewModel() {
 
     private fun toast(message: String) {
         updateUi { it.copy(toast = message) }
+    }
+
+    /** 大厅按钮与系统返回键共用同一个「确认离开」对话框，避免误触断线。 */
+    fun requestLeaveRoom() {
+        updateUi { it.copy(confirmLeave = true) }
+    }
+
+    fun cancelLeaveRoom() {
+        updateUi { it.copy(confirmLeave = false) }
     }
 
     fun leaveRoom() {
@@ -614,4 +635,7 @@ class GameViewModel : ViewModel() {
     fun undo() = dispatch(GameAction.Undo)
 
     fun redo() = dispatch(GameAction.Redo)
+
+    /** 投降：单机直接结算；联机客机把动作发给房主，由房主权威结算后回推状态。 */
+    fun resign() = dispatch(GameAction.Resign)
 }
