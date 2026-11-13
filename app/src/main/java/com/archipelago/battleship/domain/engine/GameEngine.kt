@@ -541,6 +541,7 @@ class GameEngine(config: GameConfig = GameConfig()) {
         }
         val air = Rules.isAir(kind)
         if (air && !ignoresAA && intercepted(board, listOf(at))) {
+            logOwn(by, LogKind.AA, "目标点 ${coordLabel(at)} 位于敌方防空区，战机被击落；该坐标未封锁，可换一艘舰继续攻击")
             return ShotReport(
                 board.record(at, ShotResult.INTERCEPTED, by, null, mark),
                 ShotResult.INTERCEPTED, "攻击被拦截", LogKind.AA, false
@@ -643,6 +644,10 @@ class GameEngine(config: GameConfig = GameConfig()) {
         var board = boardOf(enemy)
         val start = line.first()
         if (intercepted(board, listOf(start))) {
+            logOwn(
+                side, LogKind.AA,
+                "【鱼雷机空袭】部署点 ${coordLabel(start)} 落在敌方防空区，战机被击落；请把第 1 点点在防空圈外，第 2 点只用来定航向（航线穿过防空区不算被击落）"
+            )
             board = board.record(start, ShotResult.INTERCEPTED, side, null, false)
             setBoard(enemy, board)
             reportFailed(side, start, "攻击被拦截")
