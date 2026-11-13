@@ -101,6 +101,11 @@ fun AppRoot(vm: GameViewModel, state: UiState, activity: ComponentActivity) {
         }
     }
 
+    // 房间解散说明弹窗优先级最高：按返回键只关说明，不会误退 App
+    BackHandler(enabled = state.roomNotice.isNotEmpty()) {
+        vm.dismissRoomNotice()
+    }
+
     val primary = MaterialTheme.colorScheme.primary
     val density = LocalDensity.current
     val gridStep = with(density) { 56.dp.toPx() }
@@ -226,6 +231,53 @@ fun AppRoot(vm: GameViewModel, state: UiState, activity: ComponentActivity) {
         )
         ConfirmDialog.NONE -> Unit
     }
+
+    if (state.roomNotice.isNotEmpty()) {
+        RoomDissolvedDialog(
+            reason = state.roomNotice,
+            onDismiss = { vm.dismissRoomNotice() },
+            onHostNewRoom = {
+                vm.dismissRoomNotice()
+                vm.createRoom(activity)
+            }
+        )
+    }
+}
+
+/** 房主退出后房间解散：明确告知原因，并给客机「自己开新房」的快速出口。 */
+@Composable
+private fun RoomDissolvedDialog(
+    reason: String,
+    onDismiss: () -> Unit,
+    onHostNewRoom: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("房间已解散", fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text(reason, fontSize = 13.sp)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "本游戏由房主保存完整对局（双方舰队、布阵、回合与撤销记录），客机只持有脱敏战况，因此房主退出后不做房主接管，原房间直接解散，未结束的对局不保存。",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.80f)
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "想继续玩：由其中一台手机新建房间，另一台重新扫码或重新搜索加入即可。",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.80f)
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = onHostNewRoom) { Text("我来做房主（新房间）", fontSize = 12.sp) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("返回首页") }
+        }
+    )
 }
 
 @Composable
@@ -235,7 +287,7 @@ private fun ConfirmLeaveRoom(onConfirm: () -> Unit, onDismiss: () -> Unit) {
         title = { Text("离开房间？", fontWeight = FontWeight.Bold) },
         text = {
             Text(
-                "将返回首页并断开当前连接（联机时房主关闭房间、客机退出房间）。尚未结束的对局不会保存。",
+                "将返回首页并断开当前连接（房主离开会解散房间，客机离开则房间保持开放）。尚未结束的对局不会保存。",
                 fontSize = 13.sp
             )
         },

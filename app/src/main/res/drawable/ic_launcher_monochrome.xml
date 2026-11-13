@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 13+ 主题图标（单色）：只保留三栖剪影与雷达圈，
+  由系统按壁纸取色，仍为原创矢量图形。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,26 L74,34 L82,54 L74,74 L54,82 L34,74 L26,54 L34,34 Z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2" />
+
+    <group android:rotation="38" android:pivotX="32" android:pivotY="31">
+        <path android:fillColor="#FFFFFFFF" android:pathData="M21,29 L37,29 L45,31 L37,33 L21,33 L19,31 Z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M27,29 L33,21 L37,21 L34,29 Z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M27,33 L33,41 L37,41 L34,33 Z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M32,49 L36,49 L36,54 L32,54 Z" />
+    </group>
+
+    <group android:rotation="-16" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#FFFFFFFF" android:pathData="M31,51 L68,51 L77,55 L68,59 L31,59 Z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M44,45 L57,45 L57,51 L44,51 Z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M61,48 L68,48 L68,51 L61,51 Z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M68,48 L78,44 L78,47 L68,51 Z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M77,42 L85,43 L80,46 L85,49 L77,48 Z" />
+    </group>
+
+    <group android:rotation="18" android:pivotX="68" android:pivotY="73">
+        <path android:fillColor="#FFFFFFFF" android:pathData="M80,70 L63,70 L55,73 L63,76 L80,76 Z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M66,66 L72,66 L72,70 L66,70 Z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M36,71 L42,71 L44,73 L42,75 L36,75 Z" />
+    </group>
+</vector>

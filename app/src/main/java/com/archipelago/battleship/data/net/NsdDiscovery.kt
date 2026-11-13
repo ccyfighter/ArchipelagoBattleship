@@ -13,12 +13,20 @@ data class FoundRoom(val name: String, val ip: String, val port: Int, val key: S
  * 原生 mDNS（NsdManager）自动发现，不依赖 Google Play Services。
  * 房间密钥直接编进 serviceName：archipelago_<key>。
  * 二维码 / 手动输入 IP 是并行的兜底通道，NSD 注册失败不影响直连。
+ *
+ * v8：房主退出会 unregisterService，客机侧 onServiceLost 现在会把该房间从
+ * 「附近房间」列表里移除，避免列表残留点不开的僵尸房间。
  */
 class NsdDiscovery(context: Context) {
 
     companion object {
         const val SERVICE_TYPE = "_archipelago._tcp"
         const val PREFIX = "archipelago_"
+
+        // NsdManager 遇到重名会自行加 " (2)" 之类的后缀，直接 removePrefix
+        // 会把后缀混进密钥，房主校验必然失败、客机静默卡住。
+        private fun keyOf(name: String): String =
+            Regex("\\d{6}").find(name)?.value ?: name.removePrefix(PREFIX).trim()
     }
 
     private val app = context.applicationContext
@@ -62,7 +70,11 @@ class NsdDiscovery(context: Context) {
         }
     }
 
-    fun discover(onFound: (FoundRoom) -> Unit, onError: (String) -> Unit) {
+    fun discover(
+        onFound: (FoundRoom) -> Unit,
+        onLost: (String) -> Unit,
+        onError: (String) -> Unit
+    ) {
         val cb = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(serviceType: String) = Unit
 
@@ -73,7 +85,12 @@ class NsdDiscovery(context: Context) {
                 pump(onFound, onError)
             }
 
-            override fun onServiceLost(serviceInfo: NsdServiceInfo) = Unit
+            override fun onServiceLost(serviceInfo: NsdServiceInfo) {
+                val name = serviceInfo.serviceName ?: return
+                if (!name.startsWith(PREFIX)) return
+                val key = keyOf(name)
+                main.post { onLost(key) }
+            }
 
             override fun onDiscoveryStopped(serviceType: String) = Unit
 
@@ -100,9 +117,7 @@ class NsdDiscovery(context: Context) {
                 resolving = false
                 val ip = serviceInfo.host?.hostAddress
                 val name = serviceInfo.serviceName ?: ""
-                // NsdManager 遇到重名会自行加 " (2)" 之类的后缀，
-                // 直接 removePrefix 会把后缀混进密钥，房主校验必然失败、客机静默卡住。
-                val key = Regex("\\d{6}").find(name)?.value ?: name.removePrefix(PREFIX).trim()
+                val key = keyOf(name)
                 if (!ip.isNullOrEmpty()) {
                     main.post { onFound(FoundRoom(name, ip, serviceInfo.port, key)) }
                 }

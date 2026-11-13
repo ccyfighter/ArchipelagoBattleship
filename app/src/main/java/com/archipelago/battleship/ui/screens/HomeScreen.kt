@@ -50,15 +50,25 @@ fun HomeScreen(vm: GameViewModel, state: UiState) {
     ) {
         Spacer(Modifier.height(8.dp))
         SurfaceCard(accent = MaterialTheme.colorScheme.primary.copy(alpha = 0.70f)) {
-            // 封面：一张海图作战态势图，战列舰开火 / 舰载机投弹 / 潜艇射鱼雷同框
+            // 封面：三栖合击徽章，战列舰开炮 / 舰载机投弹 / 潜艇射鱼雷同框
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(178.dp)
                     .clip(RoundedCornerShape(10.dp))
             ) {
-                BattleScene(Modifier.fillMaxSize())
+                BattleScene(Modifier.fillMaxSize(), state.coverRadar)
             }
+            Spacer(Modifier.height(8.dp))
+            // 封面底图切换：雷达图 / 棋盘（对应手绘草图下方的两选项）
+            Row(modifier = Modifier.fillMaxWidth()) {
+                ChipButton("雷达图", state.coverRadar, true) { vm.setCoverMode(true) }
+                ChipButton("棋盘", !state.coverRadar, true) { vm.setCoverMode(false) }
+            }
+            InfoLine(
+                "封面底图：" + (if (state.coverRadar) "雷达图（同心环 + 扫描线）" else "棋盘（坐标格 + 判定标记）") +
+                    "。封面与启动图标均为同一枚三栖作战徽章，纯原创矢量绘制。"
+            )
             Spacer(Modifier.height(10.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -93,6 +103,7 @@ fun HomeScreen(vm: GameViewModel, state: UiState) {
         SurfaceCard {
             InfoLine(state.connection)
             InfoLine("单机完全离线；联机仅走局域网 / 手机热点，不经过公网服务器。")
+            InfoLine("房间规则：房主退出即解散房间；客机掉线时房间保持开放，可重新扫码加入。")
         }
         if (state.mode == Mode.GUEST) {
             Spacer(Modifier.height(8.dp))

@@ -1,110 +1,160 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  群岛海战棋 · 自适应启动图标前景（原创矢量，无任何外部素材）
+  构图来自用户手绘封面：
+    · 正中：战列舰，舰首略上扬，主炮向侧前方开火（3/4 视角）
+    · 左上：舰载机斜向俯冲入场，机头朝画面中心，投下两枚炸弹
+    · 右下：潜艇艇首朝画面中心偏前，向左上方发射一枚鱼雷
+  三个载具的「头部」统一朝内/朝前，形成三栖合击的圆形作战徽章。
+  底纹为八边形雷达圈 + 海图网格，对应首页封面可切换的「雷达图 / 棋盘」。
+  所有主体落在 108x108 视口中心半径 33 的自适应图标安全区内。
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- 作战海图外框：八边形雷达圈 + 内圈 -->
+    <!-- ······ 徽章底纹：雷达圈 + 海图网格 ······ -->
     <path
         android:fillColor="#00000000"
-        android:pathData="M54,17 L80,28 L91,54 L80,80 L54,91 L28,80 L17,54 L28,28 Z"
-        android:strokeColor="#80D8B45A"
-        android:strokeWidth="1.6" />
+        android:pathData="M54,18 L79,29 L90,54 L79,79 L54,90 L29,79 L18,54 L29,29 Z"
+        android:strokeColor="#66F0C987"
+        android:strokeWidth="1.5" />
     <path
         android:fillColor="#00000000"
-        android:pathData="M54,30 L71,37 L78,54 L71,71 L54,78 L37,71 L30,54 L37,37 Z"
-        android:strokeColor="#5535E0C0"
+        android:pathData="M54,26 L74,34 L82,54 L74,74 L54,82 L34,74 L26,54 L34,34 Z"
+        android:strokeColor="#5548D9C6"
+        android:strokeWidth="1.1" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,35 C64.5,35 73,43.5 73,54 C73,64.5 64.5,73 54,73 C43.5,73 35,64.5 35,54 C35,43.5 43.5,35 54,35 Z"
+        android:strokeColor="#3348D9C6"
+        android:strokeWidth="0.9" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M30,54 L78,54 M54,30 L54,78 M40,40 L68,40 M40,68 L68,68 M40,40 L40,68 M68,40 L68,68"
+        android:strokeColor="#2448D9C6"
+        android:strokeWidth="0.8" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M22,63 L28,63 M80,63 L86,63"
+        android:strokeColor="#6648D9C6"
         android:strokeWidth="1.1" />
 
-    <!-- 海图网格 + 十字基准 -->
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M22,54 L86,54 M54,22 L54,86 M36,38 L72,38 M36,70 L72,70 M38,36 L38,72 M70,36 L70,72"
-        android:strokeColor="#2A35E0C0"
-        android:strokeWidth="0.9" />
-
-    <!-- 舰载机：机身 + 后掠主翼 + 尾翼，向右飞行 -->
-    <path
-        android:fillColor="#FFE8D9AC"
-        android:pathData="M29,29 L53,29 L60,32 L53,35 L29,35 Z" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M40,23 L48,41 M33,26 L30,38"
-        android:strokeColor="#FFE8D9AC"
-        android:strokeWidth="2.2" />
-    <path
-        android:fillColor="#FFFFB074"
-        android:pathData="M60,30 L63,32 L60,34 Z" />
-
+    <!-- ······ 左上：舰载机，机头朝右下（朝画面中心） ······ -->
+    <group android:rotation="38" android:pivotX="32" android:pivotY="31">
+        <path
+            android:fillColor="#FFF0DCB4"
+            android:pathData="M21,29 L37,29 L45,31 L37,33 L21,33 L19,31 Z" />
+        <path
+            android:fillColor="#FFE3C285"
+            android:pathData="M27,29 L33,21 L37,21 L34,29 Z" />
+        <path
+            android:fillColor="#FFE3C285"
+            android:pathData="M27,33 L33,41 L37,41 L34,33 Z" />
+        <path
+            android:fillColor="#FFE3C285"
+            android:pathData="M20,29 L23,25 L25,25 L24,29 Z" />
+        <path
+            android:fillColor="#FFE3C285"
+            android:pathData="M20,33 L23,37 L25,37 L24,33 Z" />
+        <path
+            android:fillColor="#FFFF8A3C"
+            android:pathData="M43,30 L46,31 L43,32 Z" />
+        <path
+            android:fillColor="#FF12384A"
+            android:pathData="M35,29.6 L38,29.6 L38,32.4 L35,32.4 Z" />
+    </group>
     <!-- 投弹：下落虚线 + 两枚炸弹 -->
     <path
         android:fillColor="#00000000"
-        android:pathData="M44,37 L44,41 M44,44 L44,47 M53,37 L53,40 M53,43 L53,45"
+        android:pathData="M40,41 L38,44 M37,46 L35,49 M44,40 L44,43"
         android:strokeColor="#99FFB074"
-        android:strokeWidth="1.4" />
+        android:strokeWidth="1.3" />
     <path
         android:fillColor="#FFFFB074"
-        android:pathData="M42,47 L46,47 L46,52 L42,52 Z M51,45 L55,45 L55,49 L51,49 Z" />
-
-    <!-- 水面战列舰：舰体 + 舰桥 + 桅杆 -->
-    <path
-        android:fillColor="#FF35E0C0"
-        android:pathData="M25,53 L61,53 L73,58 L61,63 L25,63 Z" />
-    <path
-        android:fillColor="#FF35E0C0"
-        android:pathData="M37,46 L49,46 L49,53 L37,53 Z" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M43,46 L43,41"
-        android:strokeColor="#FF35E0C0"
-        android:strokeWidth="1.6" />
-
-    <!-- 主炮开火：炮口火焰 + 弹道短线 -->
-    <path
-        android:fillColor="#FFFF8A3C"
-        android:pathData="M73,54 L82,49 L78,55 L83,59 L73,61 Z" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M80,45 L83,42 M85,40 L88,37"
-        android:strokeColor="#99FFB074"
-        android:strokeWidth="1.6" />
-
-    <!-- 命中爆花 + 命中叉 -->
-    <path
-        android:fillColor="#33FF6B4A"
-        android:pathData="M82,30 L86,26 L90,30 L86,34 Z" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M81,27 L89,35 M89,27 L81,35"
-        android:strokeColor="#FFFFC107"
-        android:strokeWidth="2.2" />
-
-    <!-- 水下潜艇：艇身 + 指挥塔 + 潜望镜 -->
-    <path
-        android:fillColor="#9A35E0C0"
-        android:pathData="M26,76 L58,76 L65,79 L58,82 L26,82 Z" />
-    <path
-        android:fillColor="#9A35E0C0"
-        android:pathData="M38,71 L47,71 L47,76 L38,76 Z" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M43,71 L43,67"
-        android:strokeColor="#9A35E0C0"
-        android:strokeWidth="1.4" />
-
-    <!-- 鱼雷航迹：虚线 + 弹体 + 尾流气泡 -->
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M66,79 L70,79 M73,79 L77,79 M80,79 L83,79"
-        android:strokeColor="#99FFB074"
-        android:strokeWidth="1.5" />
+        android:pathData="M32,49 L36,49 L36,54 L32,54 Z" />
     <path
         android:fillColor="#FFFFB074"
-        android:pathData="M84,77 L89,77 L89,81 L84,81 Z" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M22,79 L24,79 M18,82 L20,82"
-        android:strokeColor="#664FC3F7"
-        android:strokeWidth="1.2" />
+        android:pathData="M42,43 L45,43 L45,47 L42,47 Z" />
+
+    <!-- ······ 正中：战列舰，舰首上扬、主炮向侧前方开火 ······ -->
+    <group android:rotation="-16" android:pivotX="54" android:pivotY="54">
+        <path
+            android:fillColor="#FF48D9C6"
+            android:pathData="M31,51 L68,51 L77,55 L68,59 L31,59 Z" />
+        <path
+            android:fillColor="#FF9BF0DE"
+            android:pathData="M68,51 L77,55 L68,55 Z" />
+        <path
+            android:fillColor="#FF48D9C6"
+            android:pathData="M44,45 L57,45 L57,51 L44,51 Z" />
+        <path
+            android:fillColor="#FF0B192C"
+            android:pathData="M47,47 L54,47 L54,49 L47,49 Z" />
+        <path
+            android:fillColor="#00000000"
+            android:pathData="M50,45 L50,40"
+            android:strokeColor="#FF48D9C6"
+            android:strokeWidth="1.6" />
+        <path
+            android:fillColor="#FF2FAE9E"
+            android:pathData="M37,46 L41,46 L41,51 L37,51 Z" />
+        <path
+            android:fillColor="#FF48D9C6"
+            android:pathData="M61,48 L68,48 L68,51 L61,51 Z" />
+        <path
+            android:fillColor="#00000000"
+            android:pathData="M68,49 L77,45"
+            android:strokeColor="#FF48D9C6"
+            android:strokeWidth="2.4" />
+        <path
+            android:fillColor="#FFFF8A3C"
+            android:pathData="M77,42 L85,43 L80,46 L85,49 L77,48 Z" />
+        <path
+            android:fillColor="#00000000"
+            android:pathData="M86,39 L89,36 M89,43 L92,41"
+            android:strokeColor="#99FFB074"
+            android:strokeWidth="1.3" />
+        <path
+            android:fillColor="#00000000"
+            android:pathData="M29,61 L72,61"
+            android:strokeColor="#664FC3F7"
+            android:strokeWidth="1.2" />
+    </group>
+
+    <!-- ······ 右下：潜艇，艇首朝左上（朝画面中心） ······ -->
+    <group android:rotation="18" android:pivotX="68" android:pivotY="73">
+        <path
+            android:fillColor="#B34FC3F7"
+            android:pathData="M80,70 L63,70 L55,73 L63,76 L80,76 Z" />
+        <path
+            android:fillColor="#FF9BD9FF"
+            android:pathData="M63,70 L55,73 L63,73 Z" />
+        <path
+            android:fillColor="#B34FC3F7"
+            android:pathData="M66,66 L72,66 L72,70 L66,70 Z" />
+        <path
+            android:fillColor="#FF0B192C"
+            android:pathData="M67,67 L71,67 L71,68.6 L67,68.6 Z" />
+        <path
+            android:fillColor="#00000000"
+            android:pathData="M69,66 L69,63"
+            android:strokeColor="#B34FC3F7"
+            android:strokeWidth="1.4" />
+        <path
+            android:fillColor="#00000000"
+            android:pathData="M52,73 L48,73 M45,73 L41,73"
+            android:strokeColor="#99FFB074"
+            android:strokeWidth="1.3" />
+        <path
+            android:fillColor="#FFFFB074"
+            android:pathData="M36,71 L42,71 L44,73 L42,75 L36,75 Z" />
+        <path
+            android:fillColor="#00000000"
+            android:pathData="M82,74 L85,74 M83,77 L86,77"
+            android:strokeColor="#6648D9C6"
+            android:strokeWidth="1.1" />
+    </group>
 </vector>

@@ -52,6 +52,15 @@ sealed class Packet {
     @SerialName("error")
     data class ServerError(val message: String) : Packet()
 
+    /**
+     * 房主主动关房。由 LanEndpoint.close(lastPacket) 在关闭 Socket 之前可靠 flush，
+     * 客机收到后立刻清理状态、回到首页并提示「房间已解散」。
+     */
+    @Serializable
+    @SerialName("room_closed")
+    data class RoomClosed(val reason: String = "房主已退出，房间已解散") : Packet()
+
+    /** 旧版本关房包，保留解析兼容；语义与 RoomClosed 一致。 */
     @Serializable
     @SerialName("bye")
     object Bye : Packet()

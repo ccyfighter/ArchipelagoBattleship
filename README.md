@@ -4,6 +4,20 @@ Android 14+ 原生策略战棋（Kotlin + Jetpack Compose Material 3 + Coroutine
 kotlinx.serialization）。单机 AI 对战 / 双机面对面局域网联机，纯本地、无公网服务器、
 不依赖 Google Play Services。
 
+> **v8 更新（当前版本）**
+> 1. 启动图标按手绘草图重绘为「三栖合击徽章」：正中战列舰舰首主炮侧向开火、
+>    左上舰载机俯冲投弹、右下潜艇发射鱼雷，机头统一朝内/朝前；同时补上
+>    Android 13+ 主题单色图标 `ic_launcher_monochrome.xml`。原创矢量，无版权风险。
+> 2. 首页封面同步改成同一枚徽章，封面下方可切换底图：**雷达图 / 棋盘**。
+> 3. 联机房间规则明确为 **房主退出 = 解散房间**（不做房主迁移）：新增
+>    `Packet.RoomClosed`，房主关闭 Socket 前可靠下发；客机收到关房包或任何断链
+>    都会清理状态、回首页并弹出说明（可一键「我来做房主」开新房）；房主侧客机
+>    掉线则房间保持开放等待重连；NSD `onServiceLost` 自动移除已关闭的房间。
+>    不做迁移的原因：权威引擎与双方隐藏信息只在房主内存，客机仅有脱敏快照，
+>    迁移必须泄露全部情报，且广播 / 二维码 / 端口都绑定房主设备。
+>
+> ⚠ 联机两台手机务必装**同一版本** APK，v8 协议新增 `room_closed` 帧。
+
 ---
 
 ## 一、第一次：还原工程 + 推送 GitHub
@@ -110,12 +124,12 @@ app/
   build.gradle.kts / proguard-rules.pro
   src/main/AndroidManifest.xml
   src/main/res/values/{strings,colors,themes}.xml、values-night/themes.xml
-  src/main/res/drawable/ic_launcher_{background,foreground}.xml
+  src/main/res/drawable/ic_launcher_{background,foreground,monochrome}.xml
   src/main/res/mipmap-anydpi-v26/ic_launcher{,_round}.xml
   src/main/java/com/archipelago/battleship/
     MainActivity.kt
     core/    AppTheme.kt          三套主题配色 + Material3 主题
-             BattleScene.kt      首页封面作战态势图（原创 Canvas 矢量插画）
+             BattleScene.kt      首页封面三栖合击徽章（雷达图 / 棋盘底图可切）
              ShipGlyph.kt         原创舰种矢量标识（Canvas）
              BoardCanvas.kt       坐标纸 / 声呐雷达棋盘、命中叉与水花圈
     domain/  model/GameModels.kt 全部数据类、枚举、舰船目录、GameAction、GameView

@@ -50,7 +50,11 @@ data class UiState(
     val timerSeconds: Int = 180,
     val toast: String = "",
     val manualJoin: Boolean = false,
-    val confirmLeave: Boolean = false
+    val confirmLeave: Boolean = false,
+    /** 首页封面底图：true = 雷达图，false = 棋盘。 */
+    val coverRadar: Boolean = true,
+    /** 房间解散说明；非空时由 AppRoot 弹出不可误触的说明弹窗。 */
+    val roomNotice: String = ""
 )
 
 /**
@@ -59,12 +63,17 @@ data class UiState(
  * - HOST：另起 ServerSocket + NSD，把 viewFor(B) 通过 Packet.State 推给客机。
  * - GUEST：没有引擎，只把 GameAction 打包发给房主，渲染房主下发的脱敏 GameView。
  *
- * 联机可靠性约定（v5）：
+ * 联机可靠性约定：
  * 1) 身份 / 密钥 / 客机在线标志全部放成员变量，不读易被覆盖的 UiState；
  * 2) 所有 UI 写入走 updateUi 原子读-改-写，网络回调统一切主线程；
  * 3) 握手 Assign 直接携带第一份完整 GameView，客机不必再等独立 State 帧；
  * 4) 客机可随时发 Packet.Sync 索要多轮全量状态，房主每次收到 Action 必回 State；
- * 5) 序列化 / 解析失败显式上报，不再静默丢帧。
+ * 5) 序列化 / 解析失败显式上报，不再静默丢帧；
+ * 6) v8：房主退出 = 解散房间（不做房主迁移）。原因：权威引擎与双方隐藏信息只在房主内存，
+ *    客机只有脱敏快照，迁移必须先把全部隐藏信息交给客机，与情报脱敏原则冲突；
+ *    且 NSD 广播 / 二维码 / 端口都绑定房主设备，迁移后旧地址全部失效。
+ *    实现上用 Packet.RoomClosed + LanEndpoint.close(lastPacket) 保证关房帧一定送达；
+ *    房主被系统杀进程等来不及发包的场景，客机侧任何断链也一律按「房间已解散」收尾。
  */
 class GameViewModel : ViewModel() {
 
@@ -149,6 +158,16 @@ class GameViewModel : ViewModel() {
         updateUi { it.copy(theme = mode) }
     }
 
+    /** 首页封面底图：雷达图 / 棋盘。 */
+    fun setCoverMode(radar: Boolean) {
+        updateUi { it.copy(coverRadar = radar) }
+    }
+
+    /** 关掉「房间已解散」说明弹窗，留在首页。 */
+    fun dismissRoomNotice() {
+        updateUi { it.copy(roomNotice = "") }
+    }
+
     fun showManualJoin(show: Boolean) {
         updateUi { it.copy(manualJoin = show) }
     }
@@ -178,12 +197,26 @@ class GameViewModel : ViewModel() {
         updateUi { it.copy(confirmLeave = false) }
     }
 
+    /**
+     * 离开房间 = 解散房间（房主）或退出房间（客机）。
+     * 房主必须先把 RoomClosed 帧可靠 flush 给客机再关 Socket；
+     * 随后立刻注销 NSD，其他手机的「附近房间」会自动移除这个房间。
+     */
     fun leaveRoom() {
         if (role == Mode.HOST && endpoint?.peerAttached == true) {
-            endpoint?.send(Packet.Bye)
+            endpoint?.close(Packet.RoomClosed("房主已退出，房间已解散"))
+        } else {
+            endpoint?.close()
         }
+        endpoint = null
         cleanup()
-        updateUi { UiState(theme = it.theme) }
+        updateUi {
+            UiState(
+                theme = it.theme,
+                coverRadar = it.coverRadar,
+                connection = "未连接"
+            )
+        }
     }
 
     /* ---------------- 三种入口 ---------------- */
@@ -201,6 +234,7 @@ class GameViewModel : ViewModel() {
                 screen = Screen.LOBBY,
                 mode = Mode.LOCAL,
                 theme = it.theme,
+                coverRadar = it.coverRadar,
                 mySide = Side.A,
                 connection = "单机模式 · AI 指挥官已入房（完全断网可用）"
             )
@@ -235,6 +269,7 @@ class GameViewModel : ViewModel() {
                 screen = Screen.LOBBY,
                 mode = Mode.HOST,
                 theme = it.theme,
+                coverRadar = it.coverRadar,
                 mySide = Side.A,
                 roomAddress = address.encode(),
                 roomKey = key,
@@ -268,6 +303,17 @@ class GameViewModel : ViewModel() {
                             connection = "已发现 ${it.discovered.size + 1} 个房间"
                         )
                     }
+                }
+            },
+            onLost = { key ->
+                // 房主关房 / 掉线后 mDNS 会回调 onServiceLost，移除僵尸房间
+                updateUi {
+                    val left = it.discovered.filterNot { r -> r.key == key }
+                    it.copy(
+                        discovered = left,
+                        connection = if (left.isEmpty()) "房间 $key 已关闭，附近暂无房间"
+                        else "房间 $key 已关闭 · 仍有 ${left.size} 个房间"
+                    )
                 }
             },
             onError = { msg -> toast(msg) }
@@ -332,6 +378,7 @@ class GameViewModel : ViewModel() {
                 screen = Screen.HOME,
                 mode = Mode.GUEST,
                 theme = it.theme,
+                coverRadar = it.coverRadar,
                 mySide = Side.B,
                 roomKey = key,
                 connection = "正在连接 $ip:$port …"
@@ -362,15 +409,58 @@ class GameViewModel : ViewModel() {
         }
     }
 
+    /**
+     * 断链处理：
+     * - 客机：房主是唯一权威战况源，任何断链都等价于房间解散，必须清理并回首页；
+     * - 房主：客机掉线不影响引擎，房间保持开放，等待对方重新扫码 / 重新发现后加入。
+     */
     private fun onLinkClosed(message: String) {
-        guestConnected = false
-        updateUi { it.copy(connection = "连接已断开：$message", guestConnected = false) }
-        toast(message)
+        when (role) {
+            Mode.GUEST -> {
+                val s = _ui.value
+                if (s.view != null || s.screen != Screen.HOME) {
+                    onRoomDissolved("与房主的连接中断，房间已解散｜$message")
+                } else {
+                    cleanup()
+                    updateUi {
+                        UiState(
+                            theme = it.theme,
+                            coverRadar = it.coverRadar,
+                            toast = "连接失败：$message"
+                        )
+                    }
+                }
+            }
+            Mode.HOST -> {
+                guestConnected = false
+                updateUi {
+                    it.copy(
+                        guestConnected = false,
+                        connection = "客机已断开，房间仍开放（可等待重新加入）· $message"
+                    )
+                }
+                toast("客机已断开：房间保持开放，让对方重新扫码即可加入")
+            }
+            Mode.LOCAL -> Unit
+        }
     }
 
     private fun onWireProblem(message: String) {
         updateUi { it.copy(connection = "联机诊断：$message") }
         toast("联机异常：$message")
+    }
+
+    /** 房间解散：清掉权威/网络状态，回到首页并弹出明确说明，绝不留旧战况页面。 */
+    private fun onRoomDissolved(reason: String) {
+        cleanup()
+        updateUi {
+            UiState(
+                theme = it.theme,
+                coverRadar = it.coverRadar,
+                connection = "房间已解散 · 未连接",
+                roomNotice = reason
+            )
+        }
     }
 
     /* ---------------- 收包 ---------------- */
@@ -409,7 +499,13 @@ class GameViewModel : ViewModel() {
                 if (!p.ok) {
                     val reason = p.reason.ifEmpty { "房主拒绝加入" }
                     cleanup()
-                    updateUi { UiState(theme = it.theme, toast = "加入失败：$reason") }
+                    updateUi {
+                        UiState(
+                            theme = it.theme,
+                            coverRadar = it.coverRadar,
+                            toast = "加入失败：$reason"
+                        )
+                    }
                     return
                 }
                 mySide = p.side
@@ -454,9 +550,15 @@ class GameViewModel : ViewModel() {
 
             is Packet.ServerError -> toast(p.message)
 
+            is Packet.RoomClosed -> {
+                if (role != Mode.GUEST) return
+                onRoomDissolved(p.reason.ifEmpty { "房主已退出，房间已解散" })
+            }
+
             Packet.Bye -> {
-                cleanup()
-                updateUi { UiState(theme = it.theme, toast = "房主已关闭房间") }
+                // 兼容旧版本房主的关房包
+                if (role != Mode.GUEST) return
+                onRoomDissolved("房主已关闭房间")
             }
         }
     }

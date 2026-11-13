@@ -194,9 +194,52 @@ class LanEndpoint(
         }
     }
 
-    fun close() {
+    /**
+     * 关闭端点。
+     *
+     * lastPacket 非空时：先在专用写线程里把这一帧 flush 出去，短暂等待对端读走，
+     * 再真正关闭 Socket。之前 leaveRoom() 直接 send(Bye) 后立刻 cleanup()，
+     * close() 里的 shutdownNow() 会把排队的 Bye 任务取消，客机只看到 EOF，
+     * 于是卡在旧战况页面上。现在关房通知一定能送达。
+     */
+    fun close(lastPacket: Packet? = null) {
         if (!running) return
         running = false
+        if (lastPacket == null) {
+            finishClose()
+            return
+        }
+        val text = try {
+            Wire.encode(lastPacket)
+        } catch (_: Exception) {
+            finishClose()
+            return
+        }
+        try {
+            outbound.execute {
+                try {
+                    val w = synchronized(lock) { writer }
+                    if (w != null) {
+                        synchronized(w) {
+                            w.write(text)
+                            w.newLine()
+                            w.flush()
+                        }
+                    }
+                } catch (_: Exception) {
+                }
+                try {
+                    Thread.sleep(180L)
+                } catch (_: InterruptedException) {
+                }
+                finishClose()
+            }
+        } catch (_: Exception) {
+            finishClose()
+        }
+    }
+
+    private fun finishClose() {
         try {
             socket?.close()
         } catch (_: Exception) {
