@@ -466,19 +466,23 @@ class GameEngine(config: GameConfig = GameConfig()) {
         val hidden = sub.cells.filter { it != center }.toSet()
         if (hidden.isEmpty()) return board
 
+        // 必须从 board 重新取当前潜艇对象：保留本回合刚设置的 surfaced = true，
+        // 也用来排除已经被深水炸弹 / 鱼雷打穿的格子，避免同一格被复核重复计一次伤害。
+        val current = board.ships.firstOrNull { it.id == sub.id } ?: return board
+        val pendingCells = hidden.filter { it !in current.hits }.toSet()
+        if (pendingCells.isEmpty()) return board
+
         val shots = board.shots.toMutableList()
         val owners = LinkedHashMap<Coord, ShotRecord>()
         for (i in shots.indices) {
             val s = shots[i]
-            if (s.result == ShotResult.MISS && s.single && s.shipType == null && s.at in hidden) {
+            if (s.result == ShotResult.MISS && s.single && s.shipType == null && s.at in pendingCells) {
                 if (!owners.containsKey(s.at)) owners[s.at] = s
                 shots[i] = s.copy(result = ShotResult.HIT, shipType = ShipType.SUBMARINE)
             }
         }
         if (owners.isEmpty()) return board
 
-        // 必须从 board 重新取当前潜艇对象，保留本回合刚设置的 surfaced = true
-        val current = board.ships.firstOrNull { it.id == sub.id } ?: return board
         val updated = current.copy(hits = current.hits + owners.keys)
         val nb = board.copy(
             ships = board.ships.map { if (it.id == sub.id) updated else it },
@@ -508,24 +512,42 @@ class GameEngine(config: GameConfig = GameConfig()) {
 
     private fun canBeHit(s: Ship, c: Coord, kind: AttackKind): Boolean {
         if (s.type != ShipType.SUBMARINE || s.surfaced) return true
-        return when (kind) {
-            AttackKind.DEPTH_CHARGE, AttackKind.TORPEDO -> true
-            AttackKind.AIR_CROSS, AttackKind.LAND_AIR -> false
-            else -> c == s.cells[1]
-        }
+        // 深水炸弹 / 鱼雷能打水下整艇；其余攻击（含无视 AA 的饱和空袭）只能打潜望镜中心格。
+        // v10 之前把 AIR_CROSS / LAND_AIR 一律判 false，导致「饱和轰炸」连露出潜望镜的
+        // 那一格都打不到，与「任何命中中心格的攻击直接一击必沉」自相矛盾。
+        return if (kind == AttackKind.DEPTH_CHARGE || kind == AttackKind.TORPEDO) true
+        else c == s.cells[1]
     }
 
-    /** 只判定「敌方飞机的部署点」是否落入防空圈；cell 参数只允许传一个点。 */
-    private fun intercepted(board: Board, cells: List<Coord>): Boolean {
+    /**
+     * 防空判定唯一入口，两条互不混用的规则：
+     *  area = true  → 区域防空网，只判定【部署点】（侦察机中心 / 鱼雷机投雷起点）；
+     *                  扫描范围、鱼雷航线、爆炸点一律不参与，这就是「AA 圈外视距打击」。
+     *  area = false → 本体点防空，只判定【炸点】是否落在防空舰自己的船体格上；
+     *                  航母 5 格 / 防空巡洋舰 3 格，不会把周围 15 格海域变成禁炸区。
+     * 陆航空袭（ignoresAA = true）与绝境副炮（物理炮击）都不进入本函数。
+     * aaDisabledUntil 记「失效的最后回合」，用 state.round <= aaDisabledUntil 判定，
+     * 燃烧弹压制当回合立即生效、下回合自动恢复。
+     */
+    private fun aaShipAt(board: Board, cells: List<Coord>, area: Boolean): Boolean {
         for (s in board.ships) {
             if (s.sunk) continue
             if (s.type != ShipType.CARRIER && s.type != ShipType.AA_CRUISER) continue
-            if (s.aaDisabledUntil == state.round) continue
-            val zone = Rules.aaZone(s, board.size)
+            // aaDisabledUntil 记的是「失效的最后回合」；默认 0，第 1 回合起不会误跳过。
+            if (state.round <= s.aaDisabledUntil) continue
+            val zone = if (area) Rules.aaZone(s, board.size) else Rules.aaBody(s, board.size)
             if (cells.any { it in zone }) return true
         }
         return false
     }
+
+    /** 部署点落入区域防空圈：侦察机 / 鱼雷机会被击落。cells 只允许传部署点。 */
+    private fun intercepted(board: Board, cells: List<Coord>): Boolean =
+        aaShipAt(board, cells, area = true)
+
+    /** 炸点落在防空舰本体：近防火力击落来犯敌机（点防空）。 */
+    private fun aaBodyAt(board: Board, at: Coord): Boolean =
+        aaShipAt(board, listOf(at), area = false)
 
     private fun applyShot(
         board: Board,
@@ -540,17 +562,26 @@ class GameEngine(config: GameConfig = GameConfig()) {
             return ShotReport(board, ShotResult.BLOCKED, "山地阻挡，攻击无效", LogKind.MISS, false)
         }
         val air = Rules.isAir(kind)
-        if (air && !ignoresAA && intercepted(board, listOf(at))) {
-            logOwn(by, LogKind.AA, "目标点 ${coordLabel(at)} 位于敌方防空区，战机被击落；该坐标未封锁，可换一艘舰继续攻击")
-            return ShotReport(
-                board.record(at, ShotResult.INTERCEPTED, by, null, mark),
-                ShotResult.INTERCEPTED, "攻击被拦截", LogKind.AA, false
-            )
-        }
+        // 炮艇「灵活规避」优先于防空判定：炮艇恰好停在防空舰本体格上时也应报免疫，
+        // 而不是被近防火力覆盖成「拦截」。
         if (air && board.ships.any { !it.sunk && it.type == ShipType.GUNBOAT && at in it.cells }) {
             return ShotReport(
                 board.record(at, ShotResult.IMMUNE, by, ShipType.GUNBOAT, mark),
                 ShotResult.IMMUNE, "目标免疫此次攻击", LogKind.INFO, false
+            )
+        }
+        // v10：区域防空网不再按【炸点】击落飞机。航母战术轰炸机从己方航母起飞，
+        // 部署点天然在敌方防空圈外，只是飞过防空区去投弹，按「飞机只是飞过该区
+        // 去炸别处不算被击落」的既定规则不应判拦截。只有炸弹直接落在防空舰本体格时，
+        // 才由该舰近防火力击落（本体点防空）。侦察机 / 鱼雷机的部署点判定在各自分支里。
+        if (air && !ignoresAA && aaBodyAt(board, at)) {
+            logOwn(
+                by, LogKind.AA,
+                "炸点 ${coordLabel(at)} 落在敌方防空舰本体，近防火力将战机击落；区域防空网只打部署点，从圈外投弹轰炸周围海域不会再被拦截；该坐标未封锁，可换一艘舰继续攻击"
+            )
+            return ShotReport(
+                board.record(at, ShotResult.INTERCEPTED, by, null, mark),
+                ShotResult.INTERCEPTED, "攻击被拦截", LogKind.AA, false
             )
         }
         val ship = board.ships.firstOrNull { !it.sunk && at in it.cells && canBeHit(it, at, kind) }
@@ -595,7 +626,13 @@ class GameEngine(config: GameConfig = GameConfig()) {
         val enemy = side.other()
         var board = boardOf(enemy)
         val cells = crossCells(center, board.size)
+        // 十字范围攻击的「部署点」= 中心格：只在这里判一次区域防空，
+        // 5 个伤害格绝不逐个判拦截（陆航空袭 ignoresAA = true，本就不进这个分支）。
         if (Rules.isAir(kind) && !ignoresAA && intercepted(board, listOf(center))) {
+            logOwn(
+                side, LogKind.AA,
+                "部署点 ${coordLabel(center)} 落在敌方防空区，战机被击落；十字 5 格的其余格与爆炸点都不参与防空判定"
+            )
             board = board.record(center, ShotResult.INTERCEPTED, side, null, false)
             setBoard(enemy, board)
             reportFailed(side, center, "攻击被拦截")
@@ -603,7 +640,8 @@ class GameEngine(config: GameConfig = GameConfig()) {
         }
         val hitTypes = HashSet<ShipType>()
         for (c in cells) {
-            val rep = applyShot(board, c, kind, side, attackerShip, ignoresAA, mark = false)
+            // 部署点已在上面判过，范围伤害的每一格不再重复做防空判定。
+            val rep = applyShot(board, c, kind, side, attackerShip, ignoresAA = true, mark = false)
             board = rep.board
             if (rep.damage) {
                 addDamage(side, attackerShip)
@@ -612,9 +650,10 @@ class GameEngine(config: GameConfig = GameConfig()) {
             reportAttack(side, c, rep)
         }
         if (disableAAOnHit && hitTypes.any { it == ShipType.CARRIER || it == ShipType.AA_CRUISER }) {
-            // 「瘫痪 1 个敌方回合」要落在对手的下一次行动回合上：
-            // A 在同一 round 内先手，B 的下一回合仍是本 round；B 先手时 A 的下一回合是 round+1。
-            val disabledRound = if (side == Side.A) state.round else state.round + 1
+            // 「瘫痪 1 个敌方回合」= 让攻击方本回合剩余的空中行动不再被该舰拦截。
+            // 之前 A / B 分别写 round 与 round+1，导致 B 刚打中却在自己剩余攻击里仍被拦截，
+            // 是 v10 复核 AA 时查出的真实不对称 bug；现在双方统一写当前 round。
+            val disabledRound = state.round
             board = board.copy(
                 ships = board.ships.map { s ->
                     if (s.type in hitTypes && (s.type == ShipType.CARRIER || s.type == ShipType.AA_CRUISER))
@@ -643,10 +682,11 @@ class GameEngine(config: GameConfig = GameConfig()) {
         val enemy = side.other()
         var board = boardOf(enemy)
         val start = line.first()
+        // 只判「投雷起点」这一个部署点。航线穿过防空区、爆炸点落在防空舰身上都不算被击落。
         if (intercepted(board, listOf(start))) {
             logOwn(
                 side, LogKind.AA,
-                "【鱼雷机空袭】部署点 ${coordLabel(start)} 落在敌方防空区，战机被击落；请把第 1 点点在防空圈外，第 2 点只用来定航向（航线穿过防空区不算被击落）"
+                "【鱼雷机空袭】第 1 点（投雷起点）${coordLabel(start)} 落在敌方防空区，战机被击落；请把第 1 点点在防空圈外，第 2 点只用来定航向（航线 / 炸点穿过防空区不算被击落，两点不要点反）"
             )
             board = board.record(start, ShotResult.INTERCEPTED, side, null, false)
             setBoard(enemy, board)
@@ -730,14 +770,19 @@ class GameEngine(config: GameConfig = GameConfig()) {
     }
 
     /**
-     * 潜航鱼雷：玩家点的坐标只用来「定航向」，鱼雷沿该方向最多推进 4 格，
-     * 只找唯一爆炸点、只结算一次伤害：
-     *   ① 碰到的第一艘未沉敌舰所在格；② 前方是山地时取撞山前一格；③ 都没遇到则射程尽头一格。
+     * 潜航鱼雷：玩家点的坐标只用来「定航向」，鱼雷沿该方向推进，只找唯一爆炸点、只结算一次伤害：
+     *   ① 碰到的第一艘未沉敌舰所在格；② 前方是山地 / 已炮击过的格子时取其前一格；③ 射程尽头一格。
      *
-     * 沿途不写 ShotRecord、不写 attackedPoints、不画轨迹，棋盘上只留爆炸点一个标记，
-     * 路径中间的格子后续仍可被火炮正常打击；日志也不再播报潜艇中心坐标，
-     * 对手无法顺着一串水花反推出潜望镜所在格，「射后强制上浮」才重新有意义。
-     * 前方第一格就是山 / 边界时不视为「已发射」：不消耗该舰行动、不触发强制上浮。
+     * 【同向递减射程】每个方向各自记一本台账：首次可推进 4 格，之后每成功发射一次，
+     * 该方向的最大推进格数减 1，于是连射依次落在 4 / 3 / 2 / 1 格处，归零后该方向不能再发射
+     * （换一个方向仍可发射）。这样既符合「后面同方向的鱼雷应在前面最远坐标少一格处引爆」，
+     * 也天然避免了同一格被多枚鱼雷重复结算。
+     * 【已被炮击过的方向】爆炸点会写进 attackedPoints（mark = true），后续同向鱼雷遇到
+     * 已被炮击 / 已炸过的格子立即截断，在它的前一格引爆；若第一格就被封死则整次发射无效，
+     * 不消耗行动、不触发强制上浮。
+     *
+     * 沿途不写 ShotRecord、不画轨迹，棋盘上只留爆炸点一个标记；中间格后续仍可被火炮打击。
+     * 日志不播报潜艇中心坐标，对手无法顺着一串水花反推出潜望镜所在格。
      */
     private fun fireTorpedo(side: Side, ship: Ship, target: Coord) {
         val center = if (ship.cells.size > 1) ship.cells[1] else ship.cells[0]
@@ -745,8 +790,8 @@ class GameEngine(config: GameConfig = GameConfig()) {
             logOwn(side, LogKind.INFO, "鱼雷只能沿潜艇所在行或列的直线方向发射")
             return
         }
-        if (target == center || target.manhattan(center) > 4) {
-            logOwn(side, LogKind.INFO, "鱼雷射程为直线 4 格内")
+        if (target == center || target.manhattan(center) > Rules.TORPEDO_MAX_STEPS) {
+            logOwn(side, LogKind.INFO, "鱼雷航向点须在直线 ${Rules.TORPEDO_MAX_STEPS} 格内")
             return
         }
         val dr = when {
@@ -759,27 +804,46 @@ class GameEngine(config: GameConfig = GameConfig()) {
             target.c < center.c -> -1
             else -> 0
         }
+        val lane = Rules.torpedoLaneKey(dr, dc)
+        val reach = Rules.torpedoReach(ship, dr, dc)
+        if (reach <= 0) {
+            logOwn(
+                side, LogKind.INFO,
+                "该方向鱼雷射程已按 4→3→2→1 用尽（剩余 0 格），请换一个航向；本次未消耗行动"
+            )
+            return
+        }
         val enemy = side.other()
         var board = boardOf(enemy)
-        val line = ArrayList<Coord>(4)
+        val line = ArrayList<Coord>(Rules.TORPEDO_MAX_STEPS)
         var blockedByMountain = false
-        for (step in 1..4) {
+        var blockedByFired = false
+        for (step in 1..reach) {
             val c = Coord(center.r + dr * step, center.c + dc * step)
             if (!c.inBounds(board.size)) break
             if (c in board.mountains) {
                 blockedByMountain = true
                 break
             }
+            // 这条航向上已有炮击 / 前次鱼雷炸点：鱼雷不能穿过去，在其前一格引爆。
+            if (c in board.attackedPoints) {
+                blockedByFired = true
+                break
+            }
             line.add(c)
         }
         if (line.isEmpty()) {
-            logOwn(side, LogKind.INFO, "本次发射无效果：前方即山地或棋盘边缘，未消耗行动")
+            logOwn(
+                side, LogKind.INFO,
+                "本次发射无效果：前方第一格即山地 / 边界 / 已被炮击过，未消耗行动（该方向剩余射程仍为 $reach 格）"
+            )
             return
         }
         // 发射细节只回给操作者：一旦全局广播「有鱼雷出击」，对手就能从炸点反推发射源
-        logOwn(side, LogKind.SKILL, "已发射潜航鱼雷，沿直线最多推进 4 格")
-        // 爆炸点：优先第一艘敌舰；否则前方有山就落在撞山前一格（即 line 末格）；
-        // 都没遇到则落在射程尽头一格。三种情况统一收敛为「只在一个格结算一次」。
+        logOwn(
+            side, LogKind.SKILL,
+            "已发射潜航鱼雷：本次最远推进 ${line.size} 格，该方向下发射程将降为 ${line.size - 1} 格"
+        )
         var impact = line.last()
         for (c in line) {
             if (board.ships.any { s -> !s.sunk && c in s.cells }) {
@@ -787,18 +851,38 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 break
             }
         }
-        if (blockedByMountain) {
-            logOwn(side, LogKind.INFO, "航线前方有山地遮挡，鱼雷在撞山前一格 ${coordLabel(line.last())} 引爆")
+        when {
+            blockedByMountain -> logOwn(
+                side, LogKind.INFO,
+                "航线前方有山地遮挡，鱼雷在撞山前一格 ${coordLabel(line.last())} 引爆"
+            )
+            blockedByFired -> logOwn(
+                side, LogKind.INFO,
+                "航线前方已有炮击 / 炸点，鱼雷在其前一格 ${coordLabel(line.last())} 引爆"
+            )
         }
+        // 炸点写进坐标去重集合：防止同格重复结算，也让下一枚同向鱼雷自动少推进一格。
         val rep = applyShot(
             board, impact, AttackKind.TORPEDO, side,
-            ShipType.SUBMARINE, ignoresAA = true, mark = false
+            ShipType.SUBMARINE, ignoresAA = true, mark = true
         )
         board = rep.board
         reportAttack(side, impact, rep)
         if (rep.damage) addDamage(side, ShipType.SUBMARINE)
         setBoard(enemy, board)
-        updatePlayer(side) { it.copy(subSurfaceNextTurn = true) }
+        // 递减台账落在自己棋盘的潜艇上（viewFor 对敌方棋盘只下发已沉舰，不泄露）。
+        val nextReach = (line.size - 1).coerceAtLeast(0)
+        updatePlayer(side) { p ->
+            p.copy(
+                board = p.board.copy(
+                    ships = p.board.ships.map { s ->
+                        if (s.id == ship.id) s.copy(torpedoLanes = s.torpedoLanes + (lane to nextReach))
+                        else s
+                    }
+                ),
+                subSurfaceNextTurn = true
+            )
+        }
         markActed(side, ship.id)
         logOwn(side, LogKind.SYSTEM, "本舰下 1 回合将强制上浮")
         checkGameOver()
@@ -979,7 +1063,9 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 val eb0 = boardOf(side.other())
                 val p0 = a.targets[0]
                 val p1 = a.targets[1]
-                if (p0 in eb0.mountains || p1 in eb0.mountains || !p1.inBounds(eb0.size)) {
+                if (!p0.inBounds(eb0.size) || !p1.inBounds(eb0.size) ||
+                    p0 in eb0.mountains || p1 in eb0.mountains
+                ) {
                     logOwn(side, LogKind.INFO, "【鱼雷机空袭】起点 / 航向点不能是山地或越界，未消耗行动")
                     return
                 }

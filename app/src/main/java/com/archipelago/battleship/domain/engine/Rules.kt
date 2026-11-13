@@ -37,6 +37,17 @@ object Rules {
      */
     const val TORPEDO_BOMBER_STEPS = 3
 
+    /** 潜艇潜航鱼雷单方向的最大推进格数；同向连射按 4→3→2→1 递减。 */
+    const val TORPEDO_MAX_STEPS = 4
+
+    /** 鱼雷发射方向台账的 key，例如向北 = "-1,0"。 */
+    fun torpedoLaneKey(dr: Int, dc: Int): String = "$dr,$dc"
+
+    /** 某个方向当前剩余推进格数；没有台账记录时视为满射程。 */
+    fun torpedoReach(ship: Ship, dr: Int, dc: Int): Int =
+        (ship.torpedoLanes[torpedoLaneKey(dr, dc)] ?: TORPEDO_MAX_STEPS)
+            .coerceIn(0, TORPEDO_MAX_STEPS)
+
     fun attacksPerTurn(aliveShips: Int): Int = minOf(aliveShips, BASE_ATTACKS_PER_TURN)
 
     fun cellsOf(origin: Coord, size: Int, o: Orientation): List<Coord> {
@@ -180,30 +191,101 @@ object Rules {
         return null
     }
 
-    fun defaultPlacements(config: GameConfig, fleet: FleetConfig, seed: Long): List<Placement> {
+    /** 随机布阵风格：0 均衡散布 / 1 边角分散 / 2 中央集结 / 3 同向编队。 */
+    fun layoutLabel(style: Int): String = when (style) {
+        1 -> "边角分散"
+        2 -> "中央集结"
+        3 -> "同向编队"
+        else -> "均衡散布"
+    }
+
+    /**
+     * 真随机布阵：每次调用传入不同的 seed 都会给出不同阵型。
+     * v10 之前 UI 固定传 cfg.seed + 31，导致「一键随机布阵」每次点的结果完全一样（伪随机）。
+     * 现在按风格生成一批合法候选，再按风格打分挑选，四种风格给出肉眼可见的不同排列方式：
+     *   0 均衡散布：随机挑一个合法候选，不偏向任何区域
+     *   1 边角分散：优先贴边、且尽量远离已布置的舰船
+     *   2 中央集结：优先靠近棋盘中央、彼此靠拢
+     *   3 同向编队：所有舰船统一横 / 纵，其余随机
+     * 候选池为空时退回全盘穷举，保证 5 艘一定都能放完。
+     */
+    fun defaultPlacements(
+        config: GameConfig,
+        fleet: FleetConfig,
+        seed: Long,
+        style: Int = 0
+    ): List<Placement> {
         val rnd = Random(seed)
+        val n = config.size
         val result = ArrayList<Placement>(5)
         val order = fleet.all().sortedByDescending { FleetCatalog.sizeOf(it) }
-        for (type in order) {
-            var done = false
-            for (attempt in 0 until 500) {
-                val o = if (rnd.nextBoolean()) Orientation.H else Orientation.V
-                val p = Placement(type, Coord(rnd.nextInt(config.size), rnd.nextInt(config.size)), o)
-                if (validatePlacement(config, result, p) == null) {
-                    result.add(p)
-                    done = true
-                    break
-                }
+        val forcedO: Orientation? = when (style) {
+            3 -> if (rnd.nextBoolean()) Orientation.H else Orientation.V
+            else -> null
+        }
+
+        /** 按风格偏置某一维起点：1 贴边、2 靠中、其余全图均匀。 */
+        fun biased(): Int = when (style) {
+            1 -> {
+                val band = maxOf(1, n / 3)
+                if (rnd.nextBoolean()) rnd.nextInt(band) else n - 1 - rnd.nextInt(band)
             }
-            if (!done) {
-                outer@ for (r in 0 until config.size) {
-                    for (c in 0 until config.size) {
-                        for (o in Orientation.values()) {
-                            val p = Placement(type, Coord(r, c), o)
-                            if (validatePlacement(config, result, p) == null) {
-                                result.add(p)
-                                break@outer
-                            }
+            2 -> {
+                val half = maxOf(1, n / 2)
+                (n / 2 - half / 2 + rnd.nextInt(half)).coerceIn(0, n - 1)
+            }
+            else -> rnd.nextInt(n)
+        }
+
+        for (type in order) {
+            val size = FleetCatalog.sizeOf(type)
+            val pool = ArrayList<Pair<Placement, Double>>()
+            var tries = 0
+            while (pool.size < 28 && tries < 900) {
+                tries++
+                val o = forcedO ?: if (rnd.nextBoolean()) Orientation.H else Orientation.V
+                val p = Placement(type, Coord(biased(), biased()), o)
+                if (validatePlacement(config, result, p) != null) continue
+                val cells = cellsOf(p.origin, size, o)
+                val other = result.flatMap {
+                    cellsOf(it.origin, FleetCatalog.sizeOf(it.type), it.orientation)
+                }
+                var sep = n.toDouble()
+                if (other.isNotEmpty()) {
+                    var best = Int.MAX_VALUE
+                    for (c in cells) {
+                        for (q in other) {
+                            val d = maxOf(abs(c.r - q.r), abs(c.c - q.c))
+                            if (d < best) best = d
+                        }
+                    }
+                    sep = best.toDouble()
+                }
+                val mid = (n - 1) / 2.0
+                val ar = cells.map { it.r }.average()
+                val ac = cells.map { it.c }.average()
+                val edge = minOf(minOf(ar, ac), minOf(n - 1 - ar, n - 1 - ac))
+                val score = when (style) {
+                    1 -> sep * 3.0 - edge + rnd.nextDouble()
+                    2 -> -abs(ar - mid) - abs(ac - mid) - sep * 0.6 + rnd.nextDouble()
+                    3 -> -abs(ar - mid) * 0.15 - abs(ac - mid) * 0.15 + rnd.nextDouble() * 3.0
+                    else -> rnd.nextDouble()
+                }
+                pool.add(p to score)
+            }
+            val best = pool.maxByOrNull { it.second }?.first
+            if (best != null) {
+                result.add(best)
+                continue
+            }
+            // 兜底：全盘穷举，保证一定能放完 5 艘
+            outer@ for (r in 0 until n) {
+                for (c in 0 until n) {
+                    for (o in Orientation.values()) {
+                        val p = Placement(type, Coord(r, c), o)
+                        if (validatePlacement(config, result, p) == null) {
+                            result.add(p)
+                            break@outer
                         }
                     }
                 }
@@ -215,8 +297,16 @@ object Rules {
     /* ------------------------- 防空区 ------------------------- */
 
     /**
-     * 防空圈只用于判定「敌方飞机的部署点」是否会被击落。
-     * 绝不因为侦查范围 / 鱼雷航线扫过防空区就把飞机打下来。
+     * 防空舰「本体点防空」：只保护自己的船体格。
+     * 用于判定飞机投弹的【炸点】是否落在近防火力里，与 aaZone（判定【部署点】的区域防空网）
+     * 严格分开 —— 否则整片 15 格海域都会变成不可轰炸区，也会和「AA 圈外视距打击」自相矛盾。
+     */
+    fun aaBody(ship: Ship, size: Int): Set<Coord> =
+        ship.cells.filter { it.inBounds(size) }.toSet()
+
+    /**
+     * 区域防空圈只用于判定「敌方飞机的部署点」是否会被击落。
+     * 绝不因为侦查范围 / 鱼雷航线 / 爆炸点扫过防空区就把飞机打下来。
      */
     fun aaZone(ship: Ship, size: Int): Set<Coord> {
         val out = HashSet<Coord>()

@@ -311,19 +311,13 @@ private fun DrawScope.legendMark(kind: LegendKind, pal: BoardPalette) {
     when (kind) {
         LegendKind.LEGAL -> {
             drawRect(pal.legalFill, topLeft = Offset.Zero, size = Size(s, s))
-            val m = s * 0.16f
-            val len = s * 0.30f
-            for (sx in listOf(0f, 1f)) {
-                for (sy in listOf(0f, 1f)) {
-                    val x = if (sx == 0f) m else s - m
-                    val y = if (sy == 0f) m else s - m
-                    val dx = if (sx == 0f) len else -len
-                    val dy = if (sy == 0f) len else -len
-                    drawLine(pal.legalInk, Offset(x, y + dy), Offset(x, y), strokeWidth = 2f)
-                    drawLine(pal.legalInk, Offset(x, y), Offset(x + dx, y), strokeWidth = 2f)
-                }
-            }
-            drawCircle(pal.legalInk, radius = s * 0.06f, center = c)
+            val m = s * 0.15f
+            drawRect(
+                pal.legalInk.copy(alpha = 0.88f),
+                topLeft = Offset(m, m), size = Size(s - 2f * m, s - 2f * m),
+                style = Stroke(2f)
+            )
+            drawCircle(pal.legalInk, radius = s * 0.055f, center = Offset(m, m))
         }
         LegendKind.SPENT -> {
             drawRect(pal.spentFill, topLeft = Offset.Zero, size = Size(s, s))

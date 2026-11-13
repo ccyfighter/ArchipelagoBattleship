@@ -33,9 +33,13 @@ import kotlin.math.max
  * 双主题海图棋盘。
  * 画布四周是一圈深墨蓝「坐标标尺带」，与页面背景、与浅色水面都形成强反差；
  * 格内状态采用「底色 + 形状 + 颜色」三重编码，任意两项之间都不会混淆：
- *   可攻击 = 青绿四角瞄准括号 / 已攻击 = 灰色斜纹 / 未命中 = 蓝空心圆环
+ *   可攻击 = 高对比内缩描边框 + 角点 / 已攻击 = 灰色斜纹 / 未命中 = 蓝空心圆环
  *   命中 = 红实心圆 + 白叉 / 击沉 = 整艘船深红框 + 白圆红叉 + S 角标
  *   拦截·免疫·阻挡 = 紫斜纹 + 菱形盾 / 最近一击 = 橙色呼吸双框
+ *
+ * v10 降噪：calm = true 时压掉交错格的明暗跳变、手绘细网格、声呐同心圆与扫描扇形，
+ * 棋盘只保留「地形 / 战果 / 情报层」这些真正需要读的信息。
+ * 「可攻击」标记也从每格 8 条四角括号 + 中心点，简化为 1 个内缩描边框 + 1 个角点。
  */
 @Composable
 fun BoardCanvas(
@@ -46,6 +50,8 @@ fun BoardCanvas(
     legalTargets: List<Coord> = emptyList(),
     highlight: Coord? = null,
     markers: List<Coord> = emptyList(),
+    /** 情报视图：压掉装饰性纹理，让战果 / 情报层成为画面主体。 */
+    calm: Boolean = false,
     onTap: (Coord) -> Unit = {}
 ) {
     val pal = palette(mode)
@@ -178,14 +184,14 @@ fun BoardCanvas(
             for (c in 0 until n) {
                 if ((r + c) % 2 == 0) {
                     drawRect(
-                        pal.waterAlt,
+                        if (calm) pal.waterAlt.copy(alpha = 0.42f) else pal.waterAlt,
                         topLeft = Offset(originPx + c * cell, originPx + r * cell),
                         size = Size(cell, cell)
                     )
                 }
             }
         }
-        if (mode == AppThemeMode.PAPER) {
+        if (mode == AppThemeMode.PAPER && !calm) {
             for (i in 0 until n * 4) {
                 val p = originPx + i * cell / 4f
                 drawLine(
@@ -245,19 +251,25 @@ fun BoardCanvas(
         }
 
         // ---------- 5. 主网格：每 5 格加粗 ----------
-        val gridAlpha = if (mode == AppThemeMode.PAPER) 0.42f else 0.24f
+        val gridAlpha = when {
+            calm && mode == AppThemeMode.PAPER -> 0.26f
+            calm -> 0.15f
+            mode == AppThemeMode.PAPER -> 0.42f
+            else -> 0.24f
+        }
+        val strongBoost = if (calm) 0.18f else 0.30f
         for (i in 0..n) {
             val p = originPx + i * cell
             val strong = i % 5 == 0 || i == n
             val ink = if (strong) pal.gridStrong else pal.grid
-            val a = if (strong) gridAlpha + 0.30f else gridAlpha
+            val a = if (strong) gridAlpha + strongBoost else gridAlpha
             val w = if (strong) 1.8f else 1f
             drawLine(ink.copy(alpha = a), Offset(p, originPx), Offset(p, originPx + span), strokeWidth = w)
             drawLine(ink.copy(alpha = a), Offset(originPx, p), Offset(originPx + span, p), strokeWidth = w)
         }
 
         // ---------- 6. 声呐主题：同心圆 + 扫描扇形 ----------
-        if (mode == AppThemeMode.SONAR) {
+        if (mode == AppThemeMode.SONAR && !calm) {
             val cx = originPx + span / 2f
             val cy = originPx + span / 2f
             val radius = span / 2f
@@ -365,26 +377,27 @@ fun BoardCanvas(
             )
         }
 
-        // ---------- 8. 可攻击候选：青绿四角瞄准括号 ----------
+        // ---------- 8. 可攻击候选：单个内缩描边框 + 左上实心角点 ----------
+        // v10 之前每格画 8 条四角括号 + 1 个中心圆点，14×14 满屏近 2000 条线段，
+        // 加上交错格与细网格就是「看着花」的主因。现在每格只画 2 个形状，
+        // 并用与水面明显拉开的高对比 legalInk 描边，反而更容易一眼看清哪些格能打。
         if (interactive && legalTargets.isNotEmpty()) {
             for (c in legalTargets) {
                 if (!c.inBounds(n) || c in board.attackedPoints) continue
                 val tl = topLeft(c)
                 drawRect(pal.legalFill, topLeft = tl, size = Size(cell, cell))
-                val m = cell * 0.14f
-                val len = cell * 0.26f
-                val sw = max(1.4f, cell * 0.055f)
-                for (sx in listOf(0f, 1f)) {
-                    for (sy in listOf(0f, 1f)) {
-                        val x = tl.x + if (sx == 0f) m else cell - m
-                        val y = tl.y + if (sy == 0f) m else cell - m
-                        val dx = if (sx == 0f) len else -len
-                        val dy = if (sy == 0f) len else -len
-                        drawLine(pal.legalInk, Offset(x, y + dy), Offset(x, y), strokeWidth = sw)
-                        drawLine(pal.legalInk, Offset(x, y), Offset(x + dx, y), strokeWidth = sw)
-                    }
-                }
-                drawCircle(pal.legalInk, radius = max(1.2f, cell * 0.055f), center = center(c))
+                val m = cell * 0.15f
+                drawRect(
+                    pal.legalInk.copy(alpha = 0.88f),
+                    topLeft = Offset(tl.x + m, tl.y + m),
+                    size = Size(cell - 2f * m, cell - 2f * m),
+                    style = Stroke(max(1.4f, cell * 0.052f))
+                )
+                drawCircle(
+                    pal.legalInk,
+                    radius = max(1.2f, cell * 0.055f),
+                    center = Offset(tl.x + m, tl.y + m)
+                )
             }
         }
 

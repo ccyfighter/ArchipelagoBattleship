@@ -35,6 +35,7 @@ import com.archipelago.battleship.ui.UiState
 import com.archipelago.battleship.ui.components.ChipButton
 import com.archipelago.battleship.ui.components.InfoLine
 import com.archipelago.battleship.ui.components.SectionTitle
+import kotlin.random.Random
 
 @Composable
 fun FleetScreen(vm: GameViewModel, state: UiState) {
@@ -50,6 +51,10 @@ fun FleetScreen(vm: GameViewModel, state: UiState) {
     var selectedSize by remember { mutableStateOf(5) }
     var orientation by remember { mutableStateOf(Orientation.H) }
     var error by remember { mutableStateOf("") }
+    /** 随机布阵风格：0 均衡散布 / 1 边角分散 / 2 中央集结 / 3 同向编队。 */
+    var layoutStyle by remember { mutableStateOf(0) }
+    /** 已生成的方案序号，仅用于给玩家一个「确实换了一套」的反馈。 */
+    var roll by remember { mutableStateOf(0) }
 
     val board = remember(cfg, placements) { Rules.buildBoard(cfg, placements) }
     val selectedType = fleet.at(selectedSize)
@@ -120,22 +125,41 @@ fun FleetScreen(vm: GameViewModel, state: UiState) {
             }
             ChipButton("横向 H", orientation == Orientation.H) { orientation = Orientation.H }
             ChipButton("纵向 V", orientation == Orientation.V) { orientation = Orientation.V }
+            // 想换槽位时显式点，不再由放置动作偷偷跳走。
+            ChipButton("下一未布置槽", false) {
+                val next = listOf(5, 4, 3, 2, 1).firstOrNull { s ->
+                    placements.none { it.type == fleet.at(s) }
+                }
+                if (next != null) selectedSize = next
+            }
+        }
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            for (s in 0..3) {
+                ChipButton(Rules.layoutLabel(s), layoutStyle == s) { layoutStyle = s }
+            }
         }
         Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
             OutlinedButton(onClick = {
-                placements = Rules.defaultPlacements(cfg, fleet, cfg.seed + 31)
+                // v10 之前固定传 cfg.seed + 31，每次点都是同一套阵型（伪随机）。
+                // 现在每次点都用全新随机种子，再叠加所选风格，能真正排出多种排列。
+                roll++
+                placements = Rules.defaultPlacements(cfg, fleet, Random.nextLong(), layoutStyle)
                 error = ""
             }, modifier = Modifier.padding(3.dp)) { Text("一键随机布阵", fontSize = 12.sp) }
             OutlinedButton(onClick = {
                 placements = emptyList()
+                roll = 0
                 error = ""
             }, modifier = Modifier.padding(3.dp)) { Text("清空布阵", fontSize = 12.sp) }
         }
+        InfoLine("已生成 $roll 套方案 · 当前风格「${Rules.layoutLabel(layoutStyle)}」。每次点随机都用新种子 + 候选池打分，可反复换出不同阵型；先挑风格再随机，会明显看出贴边 / 抱团 / 同向的差别。")
+        InfoLine("放置成功后【停留在当前槽位】，可以反复点不同格子微调这一艘；想换船请点上方「放置 N 格」或「下一未布置槽」。切换舰种时该档旧船会被移除，需要重新放置。")
 
         BoardCanvas(
             board = board,
             mode = state.theme,
             interactive = true,
+            calm = true,
             modifier = Modifier.fillMaxWidth().padding(4.dp)
         ) { tapped ->
             val p = Placement(fleet.at(selectedSize), tapped, orientation)
@@ -145,10 +169,7 @@ fun FleetScreen(vm: GameViewModel, state: UiState) {
             } else {
                 placements = placements.filter { it.type != p.type } + p
                 error = ""
-                val next = listOf(5, 4, 3, 2, 1).firstOrNull { s ->
-                    placements.none { it.type == fleet.at(s) }
-                }
-                if (next != null) selectedSize = next
+                // 不再自动 selectedSize = next：调整某一舰种时不会被悄悄切到下一艘。
             }
         }
 
