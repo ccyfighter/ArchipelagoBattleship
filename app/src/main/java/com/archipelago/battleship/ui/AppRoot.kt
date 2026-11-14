@@ -34,13 +34,19 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.archipelago.battleship.core.AppThemeMode
+import com.archipelago.battleship.core.BoardCanvas
 import com.archipelago.battleship.domain.model.BattleEndReason
+import com.archipelago.battleship.domain.model.BattleReplay
 import com.archipelago.battleship.domain.model.BattleResult
 import com.archipelago.battleship.domain.model.FleetCatalog
 import com.archipelago.battleship.domain.model.RoomPhase
+import com.archipelago.battleship.domain.model.ShotResult
 import com.archipelago.battleship.domain.model.Side
 import com.archipelago.battleship.domain.model.SideStats
+import com.archipelago.battleship.ui.components.ChipButton
 import com.archipelago.battleship.ui.components.SurfaceCard
 import com.archipelago.battleship.ui.screens.BattleScreen
 import com.archipelago.battleship.ui.screens.FleetScreen
@@ -74,6 +80,8 @@ fun AppRoot(vm: GameViewModel, state: UiState, activity: ComponentActivity) {
     }
 
     var confirm by remember { mutableStateOf(ConfirmDialog.NONE) }
+    // v13：结算页的「战场复盘」整屏界面
+    var showReplay by remember { mutableStateOf(false) }
     // 大厅里的「离开房间」按钮与系统返回键共用同一个确认框
     LaunchedEffect(state.confirmLeave) {
         if (state.confirmLeave) confirm = ConfirmDialog.LEAVE_ROOM
@@ -88,7 +96,7 @@ fun AppRoot(vm: GameViewModel, state: UiState, activity: ComponentActivity) {
      * 结算弹窗显示时交给 ResultDialog 自己的 onDismissRequest 处理。
      */
     BackHandler(
-        enabled = state.screen != Screen.HOME && confirm == ConfirmDialog.NONE
+        enabled = state.screen != Screen.HOME && confirm == ConfirmDialog.NONE && !showReplay
     ) {
         when (state.screen) {
             Screen.SCANNER -> vm.closeScanner()
@@ -100,6 +108,9 @@ fun AppRoot(vm: GameViewModel, state: UiState, activity: ComponentActivity) {
             Screen.HOME -> Unit
         }
     }
+
+    // 复盘整屏界面优先消费返回键：只关复盘，不会误触「返回房间」
+    BackHandler(enabled = showReplay) { showReplay = false }
 
     // 房间解散说明弹窗优先级最高：按返回键只关说明，不会误退 App
     BackHandler(enabled = state.roomNotice.isNotEmpty()) {
@@ -211,7 +222,12 @@ fun AppRoot(vm: GameViewModel, state: UiState, activity: ComponentActivity) {
         }
 
         if (resultShowing && view != null && view.result != null) {
-            ResultDialog(view.result, view.viewer, vm::returnToLobby)
+            ResultDialog(view.result, view.viewer, { showReplay = true }, vm::returnToLobby)
+        }
+        if (showReplay && view?.replay != null) {
+            ReplayDialog(
+                view!!.replay!!, view!!.viewer, state.theme, view!!.hostName, view!!.guestName
+            ) { showReplay = false }
         }
     }
 
@@ -330,7 +346,12 @@ private fun ConfirmResign(onConfirm: () -> Unit, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun ResultDialog(result: BattleResult, viewer: Side, onReturn: () -> Unit) {
+private fun ResultDialog(
+    result: BattleResult,
+    viewer: Side,
+    onReplay: () -> Unit,
+    onReturn: () -> Unit
+) {
     val win = result.winner == viewer
     val resigned = result.reason == BattleEndReason.RESIGN
     val title = when {
@@ -370,6 +391,9 @@ private fun ResultDialog(result: BattleResult, viewer: Side, onReturn: () -> Uni
                 }
             }
         },
+        dismissButton = {
+            TextButton(onClick = onReplay) { Text("战场复盘", fontSize = 11.sp) }
+        },
         confirmButton = {
             Button(onClick = onReturn) { Text("返回房间") }
         }
@@ -395,4 +419,95 @@ private fun StatBlock(name: String, s: SideStats) {
         fontSize = 12.sp,
         color = MaterialTheme.colorScheme.error
     )
+}
+
+
+/**
+ * v13 结算复盘：只有战斗结束后 viewFor() 才下发双方完整 Board（含全部舰船与所有打击记录）。
+ * 两行切换「房主 / 客机」×「部署图 / 打击图」，四种视角共用一块只读棋盘。
+ * 部署图 = 舰船 + 地形；打击图 = 再叠加全部 shots / attackedPoints / 情报层。
+ */
+@Composable
+private fun ReplayDialog(
+    replay: BattleReplay,
+    viewer: Side,
+    mode: AppThemeMode,
+    hostName: String,
+    guestName: String,
+    onClose: () -> Unit
+) {
+    var side by remember { mutableStateOf(viewer) }
+    var strikes by remember { mutableStateOf(true) }
+    val full = if (side == Side.A) replay.hostBoard else replay.guestBoard
+    val board = if (strikes) full else full.copy(
+        shots = emptyList(),
+        attackedPoints = emptySet(),
+        reconCells = emptySet(),
+        sonarCells = emptySet(),
+        radarCells = emptySet(),
+        strikeCells = emptySet()
+    )
+    val hits = full.shots.count { it.result == ShotResult.HIT || it.result == ShotResult.SUNK }
+    val misses = full.shots.count { it.result == ShotResult.MISS }
+    val fleet = full.ships.joinToString(" / ") { FleetCatalog.label(it.type) }
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(12.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "战场复盘",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f)
+                )
+                Button(onClick = onClose) { Text("关闭", fontSize = 11.sp) }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                ChipButton("房主 · $hostName", side == Side.A, true) { side = Side.A }
+                ChipButton("客机 · $guestName", side == Side.B, true) { side = Side.B }
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                ChipButton("部署图", !strikes, true) { strikes = false }
+                ChipButton("打击图", strikes, true) { strikes = true }
+            }
+            Text(
+                if (strikes) "打击图：全部炮击落点、战果与已沉舰"
+                else "部署图：全部舰船、山地与浅滩，不含打击记录",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+            BoardCanvas(
+                board = board,
+                mode = mode,
+                calm = true,
+                modifier = Modifier.fillMaxWidth().padding(2.dp)
+            )
+            Spacer(Modifier.height(8.dp))
+            SurfaceCard(accent = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)) {
+                Text("编成：$fleet", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    "受击记录：命中 $hits 次 · 未命中 $misses 次 · 共 ${full.shots.size} 条",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    "已沉：" + full.ships.filter { it.sunk }
+                        .joinToString(" / ") { FleetCatalog.label(it.type) }.ifEmpty { "无" },
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
 }

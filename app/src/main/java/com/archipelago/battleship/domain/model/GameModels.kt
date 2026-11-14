@@ -126,9 +126,9 @@ object FleetCatalog {
         ),
         ShipSpec(
             ShipType.SUBMARINE, "潜艇", 3,
-            "潜航鱼雷：点同行 / 同列一格只用于定航向，沿直线最多推进 4 格，在「碰到敌舰 / 撞山前一格 / 射程尽头」单点爆炸；同一方向连射按 4-3-2-1 递减射程，方向上已被炮击过的格子会截断航线；沿途不留轨迹、不锁格、不播报发射坐标，中间格后续仍可被火炮打击",
+            "潜航鱼雷：点同行 / 同列一格只定航向，沿直线最多推进 4 格；只在「碰到舰船 / 沉船残骸 / 撞山前一格 / 本次射程尽头」单点爆炸，路径上被炮击过的格子不再挡路；同一方向连射按 4-3-2-1 递减射程，余程归零后该方向只能空射（占 1 次攻击、无伤害、仍强制上浮）；沿途不留轨迹、不锁中间格、不播报发射坐标",
             "无（鱼雷即常规攻击）",
-            "潜望镜隐蔽：潜航时仅中心第 2 格可被常规炮击 / 侦察命中，首尾反馈 MISS；上浮时三格都可被打击。【潜望镜一击必沉】不论潜航 / 上浮，任何命中中心格的攻击都直接判整艇沉没，不会再带伤发射鱼雷或等上浮复核才沉；每次发射后下 1 回合强制上浮，连续潜航 3 回合后第 4 回合强制上浮"
+            "潜望镜隐蔽：潜航时仅中心第 2 格可被常规炮击 / 侦察命中，首尾反馈 MISS；上浮时三格都可被打击。【潜望镜一击必沉】不论潜航 / 上浮，任何命中中心格的攻击都直接判整艇沉没；每次发射后下 1 回合强制上浮，连续潜航 3 回合后第 4 回合强制上浮。【最后抵抗】只剩本艇时可在开火卡片切换「上浮炮击」：改为普通单格炮击（无视 AA、不减射程）、占 1 次攻击名额，立即上浮并暴露首尾格直到自己的下回合"
         ),
         ShipSpec(
             ShipType.AA_CRUISER, "防空巡洋舰", 3,
@@ -158,7 +158,7 @@ object FleetCatalog {
             ShipType.GUNBOAT, "高速炮艇", 1,
             "常规单格炮击（本档必选）",
             "呼叫陆航空袭（阶段二 / 第 4 回合起 / 全局 1 次）：锁定坐标后延时 1 回合，在己方下一回合开始时对十字 5 格执行无视一切 AA 的饱和轰炸",
-            "灵活规避：免疫所有航空攻击，可部署于近岸浅滩"
+            "机动灵活：可部署于近岸浅滩；v13 起航空攻击可正常命中，不再免疫"
         )
     )
 
@@ -285,6 +285,13 @@ data class Board(
 @Serializable
 data class PendingStrike(val center: Coord, val placedRound: Int)
 
+/**
+ * 战斗结束后公开的双方完整棋盘，用于结算页的「部署图 / 打击图」复盘。
+ * 只在 POST_BATTLE_LOBBY 由 viewFor() 下发；战斗中恒为 null，绝不提前泄露隐藏信息。
+ */
+@Serializable
+data class BattleReplay(val hostBoard: Board, val guestBoard: Board)
+
 @Serializable
 data class ChatMessage(
     val id: Long,
@@ -399,7 +406,12 @@ sealed class GameAction {
 
     @Serializable
     @SerialName("fire")
-    data class Fire(val shipId: String, val target: Coord) : GameAction()
+    data class Fire(
+        val shipId: String,
+        val target: Coord,
+        /** v13 潜艇【最后抵抗】：仅剩本艇时可选择上浮，改用普通单格炮击。 */
+        val surfaceGun: Boolean = false
+    ) : GameAction()
 
     @Serializable
     @SerialName("skill")
@@ -476,5 +488,7 @@ data class GameView(
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
     val attackBudget: Int = 3,
-    val attackUsed: Int = 0
+    val attackUsed: Int = 0,
+    /** 仅战斗结束后下发；战斗中为 null。 */
+    val replay: BattleReplay? = null
 )

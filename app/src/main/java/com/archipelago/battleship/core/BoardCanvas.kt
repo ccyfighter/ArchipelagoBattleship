@@ -11,6 +11,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
@@ -184,7 +185,7 @@ fun BoardCanvas(
             for (c in 0 until n) {
                 if ((r + c) % 2 == 0) {
                     drawRect(
-                        if (calm) pal.waterAlt.copy(alpha = 0.42f) else pal.waterAlt,
+                        if (calm) pal.waterAlt.copy(alpha = 0.28f) else pal.waterAlt,
                         topLeft = Offset(originPx + c * cell, originPx + r * cell),
                         size = Size(cell, cell)
                     )
@@ -252,12 +253,12 @@ fun BoardCanvas(
 
         // ---------- 5. 主网格：每 5 格加粗 ----------
         val gridAlpha = when {
-            calm && mode == AppThemeMode.PAPER -> 0.26f
-            calm -> 0.15f
+            calm && mode == AppThemeMode.PAPER -> 0.18f
+            calm -> 0.10f
             mode == AppThemeMode.PAPER -> 0.42f
             else -> 0.24f
         }
-        val strongBoost = if (calm) 0.18f else 0.30f
+        val strongBoost = if (calm) 0.12f else 0.30f
         for (i in 0..n) {
             val p = originPx + i * cell
             val strong = i % 5 == 0 || i == n
@@ -301,11 +302,20 @@ fun BoardCanvas(
 
         // ---------- 6.5 情报覆盖层：四种互不相同的底纹 + 角标 ----------
         // 纯显示层：不写 attackedPoints、不参与候选格计算，拦截 / 侦察 / 扫描都不影响攻击。
+        /** v13：情报层统一「内缩底衬 + 不透明描边」，不再用一层淡色盖在水面上。 */
+        fun intelFrame(c: Coord, fill: Color, ink: Color) {
+            val tl = topLeft(c)
+            val m = cell * 0.10f
+            val p = Offset(tl.x + m, tl.y + m)
+            val s = Size(cell - 2f * m, cell - 2f * m)
+            drawRect(fill.copy(alpha = 0.38f), topLeft = p, size = s)
+            drawRect(ink, topLeft = p, size = s, style = Stroke(max(1.3f, cell * 0.045f)))
+        }
         // 陆航空袭预告：橙红底 + 细斜叉
         for (c in board.strikeCells) {
             if (!c.inBounds(n)) continue
             val tl = topLeft(c)
-            drawRect(pal.strikeFill, topLeft = tl, size = Size(cell, cell))
+            intelFrame(c, pal.strikeFill, pal.strikeInk)
             val m = cell * 0.24f
             val w = max(1.2f, cell * 0.045f)
             drawLine(pal.strikeInk.copy(alpha = 0.85f), Offset(tl.x + m, tl.y + m), Offset(tl.x + cell - m, tl.y + cell - m), strokeWidth = w)
@@ -315,7 +325,7 @@ fun BoardCanvas(
         for (c in board.radarCells) {
             if (!c.inBounds(n)) continue
             val tl = topLeft(c)
-            drawRect(pal.radarFill, topLeft = tl, size = Size(cell, cell))
+            intelFrame(c, pal.radarFill, pal.radarInk)
             val m = cell * 0.14f
             val seg = cell * 0.18f
             val w = max(1f, cell * 0.035f)
@@ -332,7 +342,7 @@ fun BoardCanvas(
         for (c in board.sonarCells) {
             if (!c.inBounds(n)) continue
             val tl = topLeft(c)
-            drawRect(pal.sonarFill, topLeft = tl, size = Size(cell, cell))
+            intelFrame(c, pal.sonarFill, pal.sonarInk)
             val ctr = center(c)
             val sw = max(1f, cell * 0.04f)
             drawCircle(pal.sonarInk.copy(alpha = 0.85f), radius = cell * 0.17f, center = ctr, style = Stroke(sw))
@@ -342,7 +352,7 @@ fun BoardCanvas(
         for (c in board.reconCells) {
             if (!c.inBounds(n)) continue
             val tl = topLeft(c)
-            drawRect(pal.reconFill, topLeft = tl, size = Size(cell, cell))
+            intelFrame(c, pal.reconFill, pal.reconInk)
             val m = cell * 0.12f
             drawRect(
                 pal.reconInk.copy(alpha = 0.65f),
@@ -373,7 +383,11 @@ fun BoardCanvas(
                 pal.spentInk,
                 Offset(tl.x + cell * 0.10f, tl.y + cell * 0.90f),
                 Offset(tl.x + cell * 0.90f, tl.y + cell * 0.10f),
-                strokeWidth = 1f
+                strokeWidth = max(1.3f, cell * 0.035f)
+            )
+            drawRect(
+                pal.markerEdge.copy(alpha = 0.30f), topLeft = tl,
+                size = Size(cell, cell), style = Stroke(1f)
             )
         }
 
@@ -388,10 +402,10 @@ fun BoardCanvas(
                 drawRect(pal.legalFill, topLeft = tl, size = Size(cell, cell))
                 val m = cell * 0.15f
                 drawRect(
-                    pal.legalInk.copy(alpha = 0.88f),
+                    pal.legalInk,
                     topLeft = Offset(tl.x + m, tl.y + m),
                     size = Size(cell - 2f * m, cell - 2f * m),
-                    style = Stroke(max(1.4f, cell * 0.052f))
+                    style = Stroke(max(1.8f, cell * 0.065f))
                 )
                 drawCircle(
                     pal.legalInk,
@@ -474,9 +488,23 @@ fun BoardCanvas(
             val ctr = center(c)
             val q = cell * 0.28f
             val sw = max(1.8f, cell * 0.075f)
+            // v13：每类判定先垫一块「不透明底衬 + 深色描边」的方块，
+            // 让标识从水面、交错格与网格里彻底分离；符号再加一圈暗色光晕提高辨识度。
+            val inset = cell * 0.07f
+            val plateTl = Offset(tl.x + inset, tl.y + inset)
+            val plateSize = Size(cell - 2f * inset, cell - 2f * inset)
+            drawRect(pal.markerPlate, topLeft = plateTl, size = plateSize)
+            drawRect(
+                pal.markerEdge, topLeft = plateTl, size = plateSize,
+                style = Stroke(max(1.3f, cell * 0.045f))
+            )
             when (res) {
                 ShotResult.MISS -> {
-                    drawRect(pal.missFill, topLeft = tl, size = Size(cell, cell))
+                    drawRect(pal.missFill, topLeft = plateTl, size = plateSize)
+                    drawCircle(
+                        pal.markerEdge, radius = q * 1.10f, center = ctr,
+                        style = Stroke(max(1.8f, cell * 0.072f))
+                    )
                     drawCircle(pal.miss, radius = q, center = ctr, style = Stroke(max(1.4f, cell * 0.055f)))
                     drawCircle(pal.miss, radius = q * 0.30f, center = ctr)
                     val a = q * 1.18f
@@ -487,16 +515,18 @@ fun BoardCanvas(
                     drawLine(pal.miss.copy(alpha = 0.75f), Offset(ctr.x + a, ctr.y), Offset(ctr.x + b, ctr.y), strokeWidth = 1.2f)
                 }
                 ShotResult.HIT -> {
-                    drawRect(pal.hitFill, topLeft = tl, size = Size(cell, cell))
-                    drawRect(pal.hit, topLeft = tl, size = Size(cell, cell), style = Stroke(sw))
+                    drawRect(pal.hitFill, topLeft = plateTl, size = plateSize)
+                    drawRect(pal.hit, topLeft = plateTl, size = plateSize, style = Stroke(sw))
+                    drawCircle(pal.markerEdge, radius = q * 1.05f, center = ctr)
                     drawCircle(pal.hit, radius = q * 0.92f, center = ctr)
                     val d = q * 0.46f
                     drawLine(pal.onHit, Offset(ctr.x - d, ctr.y - d), Offset(ctr.x + d, ctr.y + d), strokeWidth = max(1.4f, cell * 0.055f))
                     drawLine(pal.onHit, Offset(ctr.x + d, ctr.y - d), Offset(ctr.x - d, ctr.y + d), strokeWidth = max(1.4f, cell * 0.055f))
                 }
                 ShotResult.SUNK -> {
-                    drawRect(pal.sunk, topLeft = tl, size = Size(cell, cell))
-                    drawRect(pal.sunkInk, topLeft = tl, size = Size(cell, cell), style = Stroke(sw * 1.2f))
+                    drawRect(pal.sunk, topLeft = plateTl, size = plateSize)
+                    drawRect(pal.sunkInk, topLeft = plateTl, size = plateSize, style = Stroke(sw * 1.2f))
+                    drawCircle(pal.markerEdge, radius = q * 1.05f, center = ctr)
                     drawCircle(pal.onSunk, radius = q * 0.94f, center = ctr)
                     val d = q * 0.46f
                     drawLine(pal.sunkInk, Offset(ctr.x - d, ctr.y - d), Offset(ctr.x + d, ctr.y + d), strokeWidth = max(1.6f, cell * 0.065f))
@@ -508,17 +538,18 @@ fun BoardCanvas(
                     nc.drawText("S", tl.x + cell * 0.80f, tl.y + cell * 0.36f, labelPaint)
                 }
                 ShotResult.INTERCEPTED, ShotResult.IMMUNE, ShotResult.BLOCKED -> {
-                    // 底色压得很淡：这些格子并未被锁死，底下的「可攻击」四角括号仍要看得见
-                    drawRect(pal.blockedFill.copy(alpha = 0.16f), topLeft = tl, size = Size(cell, cell))
+                    // 这些格子并未被锁死，但仍要有清晰的独立标识：底衬 + 斜纹 + 盾牌
+                    drawRect(pal.blockedFill.copy(alpha = 0.30f), topLeft = plateTl, size = plateSize)
                     for (k in 0..2) {
                         val o = cell * (0.18f + k * 0.28f)
                         drawLine(
-                            pal.blocked.copy(alpha = 0.45f),
+                            pal.blocked.copy(alpha = 0.55f),
                             Offset(tl.x + o, tl.y + cell * 0.88f),
                             Offset(tl.x + o + cell * 0.16f, tl.y + cell * 0.12f),
                             strokeWidth = 1f
                         )
                     }
+                    drawCircle(pal.markerEdge, radius = q * 1.06f, center = ctr)
                     val shield = Path().apply {
                         moveTo(ctr.x, ctr.y - q)
                         lineTo(ctr.x + q * 0.82f, ctr.y)
@@ -532,7 +563,7 @@ fun BoardCanvas(
                         Offset(ctr.x + q * 0.36f, ctr.y - q * 0.30f),
                         strokeWidth = max(1.6f, cell * 0.06f)
                     )
-                    labelPaint.color = pal.blocked.toArgb()
+                    labelPaint.color = pal.markerEdge.toArgb()
                     val tag = when (res) {
                         ShotResult.INTERCEPTED -> "A"
                         ShotResult.IMMUNE -> "I"

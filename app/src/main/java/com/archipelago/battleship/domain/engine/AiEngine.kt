@@ -34,18 +34,36 @@ class AiEngine(private val rnd: Random = Random.Default) {
             val legal = view.legalTargets
             if (legal.isEmpty()) break
 
-            val target: Coord = if (ship.type == ShipType.SUBMARINE) {
+            val alive = view.myBoard.ships.count { !it.sunk }
+            var surfaceGun = false
+            val target: Coord?
+            if (ship.type == ShipType.SUBMARINE && alive == 1) {
+                // v13 最后抵抗：只剩潜艇时改用上浮炮击，避免四个方向射程耗尽后卡死。
+                surfaceGun = true
+                target = pickTarget(legal)
+            } else if (ship.type == ShipType.SUBMARINE) {
                 val center = if (ship.cells.size > 1) ship.cells[1] else ship.cells[0]
-                val aligned = legal.filter {
-                    (it.r == center.r || it.c == center.c) && it.manhattan(center) in 1..4
+                // 航向点不受坐标去重影响：用 intelTargets，只保留仍有射程的方向。
+                val marks = view.intelTargets.filter { c ->
+                    val dr = c.r - center.r
+                    val dc = c.c - center.c
+                    if ((dr == 0) == (dc == 0)) return@filter false
+                    val ur = when { dr > 0 -> 1; dr < 0 -> -1; else -> 0 }
+                    val uc = when { dc > 0 -> 1; dc < 0 -> -1; else -> 0 }
+                    c.manhattan(center) in 1..Rules.torpedoReach(ship, ur, uc)
                 }
-                aligned.randomOrNull(rnd) ?: break
+                // 四个方向都归零时，随便挑一格相邻点做「空射」，避免 AI 直接停摆。
+                target = marks.randomOrNull(rnd)
+                    ?: view.intelTargets.filter { c ->
+                        (c.r == center.r || c.c == center.c) && c.manhattan(center) == 1
+                    }.randomOrNull(rnd)
             } else {
-                pickTarget(legal) ?: break
+                target = pickTarget(legal)
             }
+            if (target == null) break
 
             val before = view.enemyBoard.shots.size
-            engine.dispatch(side, GameAction.Fire(ship.id, target))
+            engine.dispatch(side, GameAction.Fire(ship.id, target, surfaceGun))
             onStep()
 
             val after = engine.viewFor(side)

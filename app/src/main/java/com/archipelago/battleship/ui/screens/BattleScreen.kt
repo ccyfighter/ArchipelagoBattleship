@@ -55,16 +55,19 @@ import com.archipelago.battleship.ui.components.StatPill
 private fun subCenter(ship: Ship): Coord =
     if (ship.cells.size > 1) ship.cells[1] else ship.cells[0]
 
-/** 潜艇鱼雷：按每个方向各自的剩余射程列出定航向格。 */
+/** 潜艇鱼雷：按每个方向各自的剩余射程列出定航向格；余程归零的方向仍留一格用于「空射」。 */
 private fun torpedoCandidates(ship: Ship, enemy: Board): List<Coord> {
     val c0 = subCenter(ship)
     val out = ArrayList<Coord>()
     for (d in DIR4) {
         val reach = Rules.torpedoReach(ship, d.r, d.c)
-        if (reach <= 0) continue
-        for (step in 1..reach) {
+        val steps = if (reach > 0) 1..reach else 1..1
+        for (step in steps) {
             val c = Coord(c0.r + d.r * step, c0.c + d.c * step)
-            if (c.inBounds(enemy.size) && c !in enemy.mountains) out.add(c)
+            if (!c.inBounds(enemy.size)) continue
+            // 空射方向不再受地形限制：点它只是定航向，引擎会直接判空射。
+            if (reach > 0 && c in enemy.mountains) continue
+            out.add(c)
         }
     }
     return out.distinct()
@@ -124,6 +127,7 @@ fun BattleScreen(vm: GameViewModel, state: UiState, onResign: () -> Unit = {}) {
     var showLog by remember { mutableStateOf(false) }
     var showLegend by remember { mutableStateOf(false) }
     var showHelp by remember { mutableStateOf(false) }
+    var surfaceGun by remember { mutableStateOf(false) }
 
     val myTurn = view.turn == view.viewer && view.phase == RoomPhase.IN_BATTLE
     val aliveShips = view.myBoard.ships.filter { !it.sunk }
@@ -134,6 +138,7 @@ fun BattleScreen(vm: GameViewModel, state: UiState, onResign: () -> Unit = {}) {
     val budgetLeft = (view.attackBudget - view.attackUsed).coerceAtLeast(0)
     val pt = previewTarget
     val sub = selectedShip
+    val lastStand = aliveShips.size == 1 && aliveShips[0].type == ShipType.SUBMARINE
 
     val candidates: List<Coord> = if (!myTurn) emptyList()
     else if (pendingSkill != null) {
@@ -154,7 +159,7 @@ fun BattleScreen(vm: GameViewModel, state: UiState, onResign: () -> Unit = {}) {
     }
     else if (tacticPhase) emptyList()
     else if (sub == null) emptyList()
-    else if (sub.type == ShipType.SUBMARINE) torpedoCandidates(sub, view.enemyBoard)
+    else if (sub.type == ShipType.SUBMARINE && !surfaceGun) torpedoCandidates(sub, view.enemyBoard)
     else view.legalTargets
 
     val highlight: Coord? = when {
@@ -169,6 +174,7 @@ fun BattleScreen(vm: GameViewModel, state: UiState, onResign: () -> Unit = {}) {
         pendingSkill = null
         skillTargets = emptyList()
         previewTarget = null
+        surfaceGun = false
     }
 
     fun onTap(c: Coord) {
@@ -295,6 +301,8 @@ fun BattleScreen(vm: GameViewModel, state: UiState, onResign: () -> Unit = {}) {
                     "鱼雷机 · 已选起点 ${coordLabel(skillTargets[0])}，再点同行 / 同列一格定航向（${skillTargets.size}/$need）"
             pendingSkill != null ->
                 "【${pendingSkill!!.label}】已选 ${skillTargets.size}/$need · ${skillTargets.joinToString("、") { coordLabel(it) }}"
+            sub != null && sub.type == ShipType.SUBMARINE && surfaceGun ->
+                "上浮炮击 · 点敌方海域格子选目标 · 首尾格暴露到下回合"
             sub != null && sub.type == ShipType.SUBMARINE ->
                 "潜艇鱼雷 · 点同行 / 同列格定航向 · 余程 ${laneText(sub)}"
             sub != null ->
@@ -383,28 +391,48 @@ fun BattleScreen(vm: GameViewModel, state: UiState, onResign: () -> Unit = {}) {
                     OutlinedButton(onClick = { clearDraft() }) { Text("取消", fontSize = 11.sp) }
                 }
             } else {
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    Button(
-                        onClick = {
-                            val id = selectedShipId
-                            val t = previewTarget
-                            if (id != null && t != null) {
-                                vm.fire(id, t)
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    if (lastStand && sub?.type == ShipType.SUBMARINE && myTurn) {
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            ChipButton("潜航鱼雷", !surfaceGun, true) {
+                                surfaceGun = false
                                 previewTarget = null
                             }
-                        },
-                        enabled = canFire,
-                        modifier = Modifier.weight(1f).padding(end = 3.dp)
-                    ) {
+                            ChipButton("上浮炮击", surfaceGun, true) {
+                                surfaceGun = true
+                                previewTarget = null
+                            }
+                        }
                         Text(
-                            if (pt != null) "确认开火 @${coordLabel(pt)}" else "确认开火",
-                            fontSize = 11.sp
+                            "仅剩潜艇 · 上浮炮击改为普通单格炮击，首尾格暴露到下回合",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                         )
+                        Spacer(Modifier.height(4.dp))
                     }
-                    OutlinedButton(
-                        onClick = { previewTarget = null },
-                        enabled = pt != null
-                    ) { Text("改选目标", fontSize = 11.sp) }
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Button(
+                            onClick = {
+                                val id = selectedShipId
+                                val t = previewTarget
+                                if (id != null && t != null) {
+                                    vm.fire(id, t, surfaceGun)
+                                    previewTarget = null
+                                }
+                            },
+                            enabled = canFire,
+                            modifier = Modifier.weight(1f).padding(end = 3.dp)
+                        ) {
+                            Text(
+                                if (pt != null) "确认开火 @${coordLabel(pt)}" else "确认开火",
+                                fontSize = 11.sp
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = { previewTarget = null },
+                            enabled = pt != null
+                        ) { Text("改选目标", fontSize = 11.sp) }
+                    }
                 }
             }
         }

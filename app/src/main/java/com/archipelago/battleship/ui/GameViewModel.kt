@@ -721,7 +721,8 @@ class GameViewModel : ViewModel() {
 
     /* ---------------- 战斗操作 ---------------- */
 
-    fun fire(shipId: String, target: Coord) = dispatch(GameAction.Fire(shipId, target))
+    fun fire(shipId: String, target: Coord, surfaceGun: Boolean = false) =
+        dispatch(GameAction.Fire(shipId, target, surfaceGun))
 
     fun useSkill(
         shipId: String,

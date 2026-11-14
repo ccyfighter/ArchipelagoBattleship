@@ -66,7 +66,10 @@ data class BoardPalette(
     val strikeFill: Color,
     val strikeInk: Color,
     val accent: Color,
-    val select: Color
+    val select: Color,
+    /** v13：判定 / 情报标识专用的不透明底衬与描边，负责把标识从水面里摘出来。 */
+    val markerPlate: Color,
+    val markerEdge: Color
 )
 
 fun palette(mode: AppThemeMode): BoardPalette = when (mode) {
@@ -111,7 +114,9 @@ fun palette(mode: AppThemeMode): BoardPalette = when (mode) {
         strikeFill = Color(0x33C0492C),
         strikeInk = Color(0xFFC0492C),
         accent = Color(0xFF1F4E79),
-        select = Color(0xFFE07B1B)
+        select = Color(0xFFE07B1B),
+        markerPlate = Color(0xFFFFFFFF),
+        markerEdge = Color(0xFF11314C)
     )
     AppThemeMode.WARROOM -> BoardPalette(
         frame = Color(0xFF1B2A20),
@@ -154,7 +159,9 @@ fun palette(mode: AppThemeMode): BoardPalette = when (mode) {
         strikeFill = Color(0x33FF9A5A),
         strikeInk = Color(0xFFFF9A5A),
         accent = Color(0xFFD8B45A),
-        select = Color(0xFFFF8A3C)
+        select = Color(0xFFFF8A3C),
+        markerPlate = Color(0xFFFBF3D9),
+        markerEdge = Color(0xFF16241A)
     )
     AppThemeMode.SONAR -> BoardPalette(
         frame = Color(0xFF041C2B),
@@ -197,7 +204,9 @@ fun palette(mode: AppThemeMode): BoardPalette = when (mode) {
         strikeFill = Color(0x33FF8A5C),
         strikeInk = Color(0xFFFF8A5C),
         accent = Color(0xFF35E0C0),
-        select = Color(0xFFFFC107)
+        select = Color(0xFFFFC107),
+        markerPlate = Color(0xFFF0FFFB),
+        markerEdge = Color(0xFF03202E)
     )
 }
 
