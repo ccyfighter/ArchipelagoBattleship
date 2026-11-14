@@ -589,20 +589,29 @@ class GameEngine(config: GameConfig = GameConfig()) {
                 board.record(at, ShotResult.MISS, by, null, mark, attackerShip),
                 ShotResult.MISS, "未命中（水花）", LogKind.MISS, false
             )
+        // 【潜望镜一击必沉】中心第 2 格是潜艇唯一暴露点。
+        // v12：不再限制 !ship.surfaced —— 上浮时三格都能被打，但中心格挨的任何一击
+        // 依然直接判整艇沉没，与手册「任何命中中心格的攻击直接判整艇沉没」一致。
+        // 判定特意放在「该格重复打击无效」之前：上浮期中心格若已挨过 1 炮，
+        // 它会同时写进 hits 与 attackedPoints，等潜艇下潜后必沉判定就永久够不着了。
+        // 只作用于 SUBMARINE，其他舰船的打击结算完全不变。
+        if (ship.type == ShipType.SUBMARINE && ship.cells.size > 1 && at == ship.cells[1]) {
+            val killed = ship.copy(hits = ship.hits + ship.cells)
+            val nb = board.copy(
+                ships = board.ships.map { if (it.id == ship.id) killed else it }
+            ).record(at, ShotResult.SUNK, by, ship.type, mark)
+            return ShotReport(
+                nb, ShotResult.SUNK, "击沉敌方 ${FleetCatalog.label(ship.type)}！",
+                LogKind.HIT, true, ship.type
+            )
+        }
         if (at in ship.hits) {
             return ShotReport(
                 board.record(at, ShotResult.MISS, by, ship.type, mark),
                 ShotResult.MISS, "该格重复打击无效", LogKind.MISS, false
             )
         }
-        // 【潜望镜一击必沉】水下潜艇的中心第 2 格是唯一暴露点（潜望镜）。
-        // 一旦被任何能命中它的攻击（常规炮击 / 舰载机炸弹 / 深弹 / 鱼雷）打中，
-        // 直接判整艇沉没：不再出现「只掉 1 格血还能发射鱼雷、等强制上浮复核才沉」。
-        // 只作用于 SUBMARINE，其他舰船的打击结算完全不变。
-        val periscopeHit = ship.type == ShipType.SUBMARINE &&
-            !ship.surfaced && ship.cells.size > 1 && at == ship.cells[1]
-        val extra = if (periscopeHit) ship.cells else emptyList()
-        val updated = ship.copy(hits = ship.hits + at + extra)
+        val updated = ship.copy(hits = ship.hits + at)
         val ships = board.ships.map { if (it.id == ship.id) updated else it }
         val result = if (updated.sunk) ShotResult.SUNK else ShotResult.HIT
         val nb = board.copy(ships = ships).record(at, result, by, ship.type, mark)
