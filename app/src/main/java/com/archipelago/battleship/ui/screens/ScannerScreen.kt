@@ -143,13 +143,8 @@ fun ScannerScreen(
                 if (granted) "将房主的房间二维码放入取景框" else "需要相机权限才能扫码",
                 color = MaterialTheme.colorScheme.primary
             )
-            Text(
-                "二维码内容：ARCHIPELAGO|1|IP|Port|房间密钥",
-                color = MaterialTheme.colorScheme.onBackground,
-                style = MaterialTheme.typography.bodySmall
-            )
             Button(onClick = onCancel, modifier = Modifier.padding(top = 8.dp)) {
-                Text("取消 · 返回首页")
+                Text("取消")
             }
         }
     }

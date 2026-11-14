@@ -236,7 +236,7 @@ class GameViewModel : ViewModel() {
                 theme = it.theme,
                 coverRadar = it.coverRadar,
                 mySide = Side.A,
-                connection = "单机模式 · AI 指挥官已入房（完全断网可用）"
+                connection = "单机对战 · AI 已就位"
             )
         }
         e.dispatch(Side.B, GameAction.SetName("AI 指挥官"))
@@ -283,7 +283,7 @@ class GameViewModel : ViewModel() {
             // mDNS 注册回调常晚于客机连入，别把「客机已加入」覆盖掉
             updateUi {
                 if (it.guestConnected) it
-                else it.copy(connection = if (ok) "房间已广播（mDNS）：$ip:$port · 密钥 $key" else msg)
+                else it.copy(connection = if (ok) "房间已开放：$ip:$port · 密钥 $key" else msg)
             }
         }
     }

@@ -255,24 +255,10 @@ private fun RoomDissolvedDialog(
         onDismissRequest = onDismiss,
         title = { Text("房间已解散", fontWeight = FontWeight.Bold) },
         text = {
-            Column {
-                Text(reason, fontSize = 13.sp)
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "本游戏由房主保存完整对局（双方舰队、布阵、回合与撤销记录），客机只持有脱敏战况，因此房主退出后不做房主接管，原房间直接解散，未结束的对局不保存。",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.80f)
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "想继续玩：由其中一台手机新建房间，另一台重新扫码或重新搜索加入即可。",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.80f)
-                )
-            }
+            Text(reason, fontSize = 13.sp)
         },
         confirmButton = {
-            Button(onClick = onHostNewRoom) { Text("我来做房主（新房间）", fontSize = 12.sp) }
+            Button(onClick = onHostNewRoom) { Text("新建房间", fontSize = 12.sp) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("返回首页") }
@@ -286,10 +272,7 @@ private fun ConfirmLeaveRoom(onConfirm: () -> Unit, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text("离开房间？", fontWeight = FontWeight.Bold) },
         text = {
-            Text(
-                "将返回首页并断开当前连接（房主离开会解散房间，客机离开则房间保持开放）。尚未结束的对局不会保存。",
-                fontSize = 13.sp
-            )
+            Text("将返回首页并断开连接，未结束的对局不会保存。", fontSize = 13.sp)
         },
         confirmButton = { Button(onClick = onConfirm) { Text("确认离开") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("继续留在房间") } }
@@ -307,13 +290,10 @@ private fun BattleBackMenu(
         title = { Text("离开对局？", fontWeight = FontWeight.Bold) },
         text = {
             Column {
-                Text(
-                    "战斗中不能直接返回上一层。可以投降结束本局，或直接返回首页（联机时会断开房间）。",
-                    fontSize = 13.sp
-                )
+                Text("可以投降结束本局，或直接返回首页。", fontSize = 13.sp)
                 Spacer(Modifier.height(6.dp))
                 TextButton(onClick = onLeave) {
-                    Text("或：返回首页（断开房间）", fontSize = 12.sp)
+                    Text("返回首页", fontSize = 12.sp)
                 }
             }
         },
@@ -334,18 +314,10 @@ private fun ConfirmResign(onConfirm: () -> Unit, onDismiss: () -> Unit) {
             )
         },
         text = {
-            Column {
-                Text(
-                    "投降会立即结束本局并判对方获胜，本回合未完成的行动全部作废，且无法撤销。",
-                    fontSize = 13.sp
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "结束后双方仍可点「返回房间」保持连接、解锁聊天，直接开启下一局。",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.80f)
-                )
-            }
+            Text(
+                "投降会立即结束本局并判对方获胜，本回合未完成的行动作废，且无法撤销。",
+                fontSize = 13.sp
+            )
         },
         confirmButton = {
             Button(
@@ -396,16 +368,10 @@ private fun ResultDialog(result: BattleResult, viewer: Side, onReturn: () -> Uni
                 SurfaceCard(accent = MaterialTheme.colorScheme.secondary.copy(alpha = 0.6f)) {
                     StatBlock("客机", result.guest)
                 }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "点击『返回房间』后：双方不断开连接、不退出房间，聊天窗口重新解锁；房主可重调地图 / 山地，双方可换船重新布阵，直接开启下一局。",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.80f)
-                )
             }
         },
         confirmButton = {
-            Button(onClick = onReturn) { Text("返回房间（保持连接）") }
+            Button(onClick = onReturn) { Text("返回房间") }
         }
     )
 }
